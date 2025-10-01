@@ -62,7 +62,7 @@ namespace AEPQ.Services
             try
             {
                 // 1. 요청 메시지 보내기
-                byte[] requestData = Encoding.ASCII.GetBytes("GET_COORDINATE\n"); // 예시 요청
+                byte[] requestData = Encoding.ASCII.GetBytes("align\n"); // 예시 요청
                 await stream.WriteAsync(requestData, 0, requestData.Length);
                 logger("  - TCP/IP: 좌표값 요청 전송", Color.CornflowerBlue);
 

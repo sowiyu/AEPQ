@@ -15,8 +15,6 @@
     <PackageReference Include="MaterialDesignThemes" Version="5.2.1" />
     <PackageReference Include="MaterialSkin.2" Version="2.3.1" />
     <PackageReference Include="MaterialSkin.2.NetCore" Version="2.2.1" />
-    <PackageReference Include="NModbus4" Version="2.1.0" />
-    <PackageReference Include="NModbus4.NetCore" Version="3.0.0" />
     <PackageReference Include="System.IO.Ports" Version="9.0.9" />
   </ItemGroup>
 

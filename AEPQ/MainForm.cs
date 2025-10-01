@@ -1,5 +1,6 @@
 ﻿using AEPQ.Services;
 using EasyModbus;
+using log4net.Repository.Hierarchy;
 using MaterialSkin;
 using MaterialSkin.Controls;
 using System;
@@ -244,29 +245,143 @@ namespace AEPQ
         {
             Log("▶️ 동작 1 시작...", Color.Blue);
 
-            if (rs485Service == null || !rs485Service.IsOpen) { Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange); return; }
-            if (tcpService == null || !tcpService.IsConnected) { Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange); return; }
-            if (modbusService == null || !modbusService.IsConnected) { Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange); return; }
-
-            var cmd = new CommandData { Description = "케이스 실린더 전진", Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 } };
-            rs485Service.SendPacket(cmd);
-            await Task.Delay(500);
-
-            string coordinate = await tcpService.RequestCoordinate();
-            if (coordinate == "ERROR") return;
-
-            bool success = modbusService.WriteRegister(130, 1);
-            if (!success) return;
-            await Task.Delay(200);
-
-            int[] readValue = modbusService.ReadHoldingRegisters(150, 1);
-            if (readValue != null && readValue.Length > 0)
+            if (rs485Service == null || !rs485Service.IsOpen)
             {
-                Log($"  - Modbus: 주소 150에서 값 '{readValue[0]}' 읽기 완료", Color.Blue);
+                Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange);
+                return;
             }
 
-            Log("✅ 동작 1의 초기 단계가 완료되었습니다.", Color.Green);
+            if (tcpService == null || !tcpService.IsConnected)
+            {
+                Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange);
+                return;
+            }
+
+            if (modbusService == null || !modbusService.IsConnected)
+            {
+                Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange);
+                return;
+            }
+
+            try
+            {
+                // 1. RS-485 실린더 전진
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "케이스 실린더 전진",
+                //    Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
+                //});
+                //Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+                //await Task.Delay(500);
+
+                // 2. TCP 얼라인 요청 및 응답 대기
+                string coordinate = "";
+                while (true)
+                {
+                    coordinate = await tcpService.RequestCoordinate(); // align 요청
+                    if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("align_end"))
+                    {
+                        Log($"  - TCP 좌표 응답: {coordinate}", Color.DarkCyan);
+                        break;
+                    }
+                    await Task.Delay(200); // 서버 응답 대기
+                }
+
+                // 3. 좌표 파싱 후 Modbus 132~137 전송
+                string[] blocks = coordinate.Replace("align_end_", "").Split(',');
+                if (blocks.Length != 2) // 예시 기준 2블록
+                {
+                    Log("  - ❌ 좌표 블록 수가 2가 아님: " + blocks.Length, Color.Red);
+                    return;
+                }
+
+                int modbusAddr = 132; // 시작 주소
+                foreach (var block in blocks)
+                {
+                    var vals = block.Split('_'); // x_y_rz
+                    if (vals.Length != 3) continue;
+
+                    int x = int.Parse(vals[0]);
+                    int y = int.Parse(vals[1]);
+                    int rz = int.Parse(vals[2]);
+
+                    // 음수 보정
+                    if (x < 0) x = x * -1 + 10000 ;  // -102 → 10102
+                    if (y < 0) y = 10000 + y * -1;
+                    if (rz < 0) rz = 1000 + rz * -1;
+
+                    int[] toWrite = new int[] { x, y, rz };
+
+                    for (int i = 0; i < toWrite.Length; i++)
+                    {
+                        try
+                        {
+                            modbusService.WriteRegister(modbusAddr + i, toWrite[i]);
+                            await Task.Delay(50); // 안정성을 위해 딜레이
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"  - ❌ Modbus 쓰기 오류: {ex.Message}", Color.Red);
+                            if (!modbusService.IsConnected)
+                            {
+                                modbusService.Connect();
+                                modbusService.WriteRegister(modbusAddr + i, toWrite[i]);
+                                Log($"  - 재시도: {ex.Message}", Color.Red);
+                            }
+                        }
+                    }
+
+                    modbusAddr += 3;
+                }
+                Log("  - Modbus: 132~137번에 좌표 전송 완료", Color.DarkBlue);
+
+                // 4. Modbus 130번에 1 써서 로봇 동작 시작
+                modbusService.WriteRegister(130, 1);
+                Log("  - Modbus: 130번에 1 써서 로봇 동작 시작", Color.DarkBlue);
+
+                // 5. Modbus 150번 모니터링 후 130 초기화
+                while (true)
+                {
+                    int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+                    if (readVal != null && readVal.Length > 0 && readVal[0] == 1)
+                    {
+                        modbusService.WriteRegister(130, 0); // 초기화
+                        Log("  - Modbus: 150번=1 확인, 130번 초기화", Color.DarkBlue);
+                        break;
+                    }
+                    await Task.Delay(200);
+                }
+
+                // 6. RS-485 실린더 전진 → 후진
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "케이스 실린더 전진",
+                //    Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
+                //});
+                //await Task.Delay(500);
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "케이스 실린더 후진",
+                //    Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 }
+                //});
+                //Log("  - RS-485: 실린더 전진 → 후진 완료", Color.DarkBlue);
+
+                Log("✅ 동작 1 완료!", Color.Green);
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ 동작 1 중 오류 발생: {ex.Message}", Color.Red);
+            }
         }
+
+
+
+
+
+
+
+
+
 
         private void BtnStartOperation2_Click(object sender, EventArgs e)
         {
