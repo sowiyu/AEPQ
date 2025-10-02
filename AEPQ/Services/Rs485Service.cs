@@ -373,7 +373,7 @@ private void HandleAutoMode2(byte[] packet)
                 // 로그 필터링
                 // if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
                 // {
-                logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                //logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
                 // }
             }
             catch (Exception ex) { logger($"❌ 전송 실패: {ex.Message}", Color.Red); }
@@ -394,6 +394,8 @@ private void HandleAutoMode2(byte[] packet)
                 catch (Exception ex) { logger($"❌ RS-485 Raw 전송 실패: {ex.Message}", Color.Red); }
             }
         }
+
+
     }
 }
 

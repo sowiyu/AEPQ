@@ -26,6 +26,8 @@ namespace AEPQ
         private MaterialTabSelector tabSelector;
         private Panel mainPanel;
         private TabPage tabPageStart, tabPageManual;
+        public event Action<bool, bool> OnButtonEnableChanged;
+
 
         // '시작' 탭 컨트롤
         private GroupBox groupModbus, groupTcp, groupRs485Start;
@@ -135,7 +137,7 @@ namespace AEPQ
 
             groupModbus = new GroupBox { Text = "Modbus TCP/IP 연결", Location = new Point(330, 20), Width = 300, Height = 120 };
             groupModbus.Controls.Add(new Label { Text = "IP 주소:", Location = new Point(15, 35), AutoSize = true });
-            txtModbusIp = new TextBox { Text = "127.0.0.1", Location = new Point(80, 32), Width = 120 };
+            txtModbusIp = new TextBox { Text = "192.168.1.10", Location = new Point(80, 32), Width = 120 };
             groupModbus.Controls.Add(new Label { Text = "포트:", Location = new Point(210, 35), AutoSize = true });
             txtModbusPort = new TextBox { Text = "502", Location = new Point(250, 32), Width = 40 };
             btnModbusConnect = new Button { Text = "연결", Location = new Point(15, 70), Width = 130 };
@@ -151,7 +153,7 @@ namespace AEPQ
             groupTcp = new GroupBox { Text = "TCP/IP 연결 (좌표)", Location = new Point(640, 20), Width = 280, Height = 120 };
             groupTcp.Controls.Add(new Label { Text = "IP:Port", Location = new Point(15, 35), AutoSize = true });
             txtTcpIp = new TextBox { Text = "127.0.0.1", Location = new Point(65, 32), Width = 120 };
-            txtTcpPort = new TextBox { Text = "8080", Location = new Point(195, 32), Width = 60 };
+            txtTcpPort = new TextBox { Text = "20001", Location = new Point(195, 32), Width = 60 };
             btnTcpConnect = new Button { Text = "연결", Location = new Point(15, 70), Width = 120 };
             btnTcpConnect.Click += BtnTcpConnect_Click;
             btnTcpDisconnect = new Button { Text = "해제", Location = new Point(145, 70), Width = 120, Enabled = false };
@@ -162,9 +164,9 @@ namespace AEPQ
             groupTcp.Controls.Add(btnTcpDisconnect);
             tabPageStart.Controls.Add(groupTcp);
 
-            btnStartOperation1 = new Button { Text = "동작 1 시작", Location = new Point(50, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
+            btnStartOperation1 = new Button { Text = "투입 시작", Location = new Point(50, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
             btnStartOperation1.Click += BtnStartOperation1_Click;
-            btnStartOperation2 = new Button { Text = "동작 2 시작", Location = new Point(480, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
+            btnStartOperation2 = new Button { Text = "추출 시작", Location = new Point(480, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
             btnStartOperation2.Click += BtnStartOperation2_Click;
             tabPageStart.Controls.Add(btnStartOperation1);
             tabPageStart.Controls.Add(btnStartOperation2);
@@ -290,6 +292,9 @@ namespace AEPQ
 
         private async void BtnStartOperation1_Click(object sender, EventArgs e)
         {
+            btnStartOperation1.Enabled = false; // 버튼 눌리면 바로 Disable
+            btnStartOperation2.Enabled = false; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
+
             Log("▶️ 동작 1 시작...", Color.Blue);
 
             if (rs485Service == null || !rs485Service.IsOpen)
@@ -333,20 +338,25 @@ namespace AEPQ
                 // 2. TCP 얼라인 요청 및 응답 대기
                 string coordinate = "";
                 //coordinate = "align_end_555_111_222,123_45_67";
+
                 while (true)
                 {
                     coordinate = await tcpService.RequestCoordinate(); // align 요청
-                    if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("align_end"))
+
+                    await Task.Delay(100); // 서버 응답 대기
+                    if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("PC_Align_align_end"))
                     {
                         Log($"  - TCP 좌표 응답: {coordinate}", Color.DarkCyan);
                         break;
                     }
-                    await Task.Delay(200); // 서버 응답 대기
+                    
                 }
+
+
 
                 Thread.Sleep(1000);
                 // 3. 좌표 파싱 후 Modbus 132~137 전송
-                string[] blocks = coordinate.Replace("align_end_", "").Split(',');
+                string[] blocks = coordinate.Replace("PC_Align_align_end_", "").Split(',');
                 if (blocks.Length != 2) // 예시 기준 2블록
                 {
                     Log("  - ❌ 좌표 블록 수가 2가 아님: " + blocks.Length, Color.Red);
@@ -458,6 +468,8 @@ namespace AEPQ
                         });
                         Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
                         await Task.Delay(500);
+                        btnStartOperation1.Enabled = true; // 버튼 눌리면 바로 Disable
+                        btnStartOperation2.Enabled = true; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
                         break;
                     }
                     await Task.Delay(2000);
@@ -494,6 +506,9 @@ namespace AEPQ
                 Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange);
                 return;
             }
+
+            btnStartOperation1.Enabled = false; // 버튼 눌리면 바로 Disable
+            btnStartOperation2.Enabled = false; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
 
             Log("▶️ 동작 2 시작...", Color.DarkCyan);
 
@@ -624,6 +639,8 @@ namespace AEPQ
                         Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
 
                         await Task.Delay(100); // 명령 후 안정화 시간
+                        btnStartOperation1.Enabled = true; // 버튼 눌리면 바로 Disable
+                        btnStartOperation2.Enabled = true; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
                         break;
                     }
                     await Task.Delay(200); // 폴링 대기
