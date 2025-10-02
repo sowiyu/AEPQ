@@ -8,6 +8,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Modbus.Device;
+using System.Drawing;
 
 namespace AEPQ
 {
@@ -23,6 +24,7 @@ namespace AEPQ
         // --- UI 컨트롤 ---
         private MaterialTabControl tabControl;
         private MaterialTabSelector tabSelector;
+        private Panel mainPanel;
         private TabPage tabPageStart, tabPageManual;
 
         // '시작' 탭 컨트롤
@@ -45,7 +47,7 @@ namespace AEPQ
         private Button btnStartAutoMode, btnStopAutoMode;
         private TextBox txtCustomPacket, txtSimulatedReceive;
         private Button btnSendCustomPacket, btnProcessSimulatedReceive;
-
+        private Panel manualPagePanel;
         public MainForm()
         {
             InitializeComponent();
@@ -55,8 +57,8 @@ namespace AEPQ
             materialSkinManager.AddFormToManage(this);
             materialSkinManager.Theme = MaterialSkinManager.Themes.LIGHT;
             materialSkinManager.ColorScheme = new ColorScheme(
-                Primary.BlueGrey800, Primary.BlueGrey900,
-                Primary.BlueGrey500, Accent.LightBlue200,
+                Primary.LightBlue500, Primary.LightBlue500,
+                Primary.LightBlue200, Accent.LightBlue700,
                 TextShade.WHITE);
         }
 
@@ -65,36 +67,50 @@ namespace AEPQ
             this.Text = "AEPQ 통합 제어 프로그램";
             this.ClientSize = new System.Drawing.Size(940, 800);
 
-            // 1. TabControl 생성 (내용 담당)
+            // 1. 탭 컨트롤들 생성
             tabControl = new MaterialTabControl { Dock = DockStyle.Fill };
             tabPageStart = new TabPage { Text = "시작" };
             tabPageManual = new TabPage { Text = "단동 테스트" };
             tabControl.TabPages.Add(tabPageStart);
             tabControl.TabPages.Add(tabPageManual);
 
-            // 2. TabSelector 생성 (헤더/제목 담당)
             tabSelector = new MaterialTabSelector
             {
-                BaseTabControl = tabControl, // tabControl과 연결 (가장 중요)
+                BaseTabControl = tabControl,
                 Depth = 0,
-                Dock = DockStyle.Top, // 폼 상단에 위치
+                Dock = DockStyle.Top,
+                // 폰트를 굵게 설정
+                Font = new Font("Roboto", 13f, FontStyle.Bold, GraphicsUnit.Point)
             };
 
+            // 2. 로그 박스 생성 (스크롤바 및 줄바꿈 속성 추가)
             txtLog = new RichTextBox
             {
                 Dock = DockStyle.Bottom,
-                Height = 250,
+                Height = 200,
                 ReadOnly = true,
                 Font = new Font("Consolas", 9),
                 BackColor = Color.FromArgb(50, 50, 50),
-                ForeColor = Color.White
+                ForeColor = Color.White,
+                WordWrap = false, // 자동 줄바꿈 끄기
+                ScrollBars = RichTextBoxScrollBars.ForcedBoth // 가로/세로 스크롤바 항상 표시
             };
 
-            // 3. 폼에 컨트롤 추가 (Selector를 먼저 추가해야 상단에 보임)
-            this.Controls.Add(tabSelector);
-            this.Controls.Add(tabControl);
-            this.Controls.Add(txtLog);
+            // 3. 메인 컨테이너 Panel 생성
+            mainPanel = new Panel
+            {
+                Dock = DockStyle.Fill
+            };
 
+            // 4. Panel에 tabControl과 txtLog를 추가
+            mainPanel.Controls.Add(tabControl);
+            mainPanel.Controls.Add(txtLog);
+
+            // 5. 폼(this)에 mainPanel과 tabSelector를 추가
+            this.Controls.Add(mainPanel);
+            this.Controls.Add(tabSelector);
+
+            // 6. 탭 페이지 초기화
             InitializeStartTab();
             InitializeManualTestTab();
         }
@@ -156,6 +172,20 @@ namespace AEPQ
 
         private void InitializeManualTestTab()
         {
+            // 1. 스크롤을 담당할 패널을 생성합니다.
+            // 이 패널이 탭 페이지 전체를 덮고, 내용이 길어지면 스크롤바를 만듭니다.
+            manualPagePanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true
+            };
+            // 생성한 패널을 '단동 테스트' 탭 페이지에 추가합니다.
+            tabPageManual.Controls.Add(manualPagePanel);
+
+            // 2. 이제부터 모든 UI 컨트롤들은 tabPageManual이 아닌 manualPagePanel에 추가합니다.
+            // 이렇게 해야 패널의 스크롤 기능이 적용됩니다.
+
+            // RS-485 연결 그룹
             groupRS485Manual = new GroupBox { Text = "RS-485 연결", Location = new Point(20, 20), Width = 880, Height = 60 };
             groupRS485Manual.Controls.Add(new Label { Text = "COM 포트:", Location = new Point(15, 25), AutoSize = true });
             cmbPortManual = new ComboBox { Location = new Point(95, 22), Width = 120 };
@@ -169,8 +199,9 @@ namespace AEPQ
             groupRS485Manual.Controls.Add(btnRefreshManual);
             groupRS485Manual.Controls.Add(btnConnectManual);
             groupRS485Manual.Controls.Add(btnDisconnectManual);
-            tabPageManual.Controls.Add(groupRS485Manual);
+            manualPagePanel.Controls.Add(groupRS485Manual); // 스크롤 패널에 추가
 
+            // 명령어 목록 그리드
             dgvCommands = new DataGridView
             {
                 Location = new Point(20, 90),
@@ -183,8 +214,9 @@ namespace AEPQ
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
             };
             dgvCommands.CellContentClick += DgvCommands_CellContentClick;
-            tabPageManual.Controls.Add(dgvCommands);
+            manualPagePanel.Controls.Add(dgvCommands); // 스크롤 패널에 추가
 
+            // 자동 모드 그룹
             autoModeGroup = new GroupBox { Text = "자동 모드 (핸드툴 1 & 2)", Location = new Point(20, 350), Width = 880, Height = 55 };
             btnStartAutoMode = new Button { Text = "시작", Location = new Point(15, 20), Width = 150 };
             btnStartAutoMode.Click += BtnStartAutoMode_Click;
@@ -192,8 +224,9 @@ namespace AEPQ
             btnStopAutoMode.Click += BtnStopAutoMode_Click;
             autoModeGroup.Controls.Add(btnStartAutoMode);
             autoModeGroup.Controls.Add(btnStopAutoMode);
-            tabPageManual.Controls.Add(autoModeGroup);
+            manualPagePanel.Controls.Add(autoModeGroup); // 스크롤 패널에 추가
 
+            // 패킷 직접 전송 그룹
             sendGroup = new GroupBox { Text = "패킷 직접 전송", Location = new Point(20, 410), Width = 880, Height = 75 };
             sendGroup.Controls.Add(new Label { Text = "16-byte hex:", Location = new Point(15, 35), AutoSize = true });
             txtCustomPacket = new TextBox { Location = new Point(100, 32), Width = 650, Font = new Font("Consolas", 9) };
@@ -201,8 +234,9 @@ namespace AEPQ
             btnSendCustomPacket.Click += BtnSendCustomPacket_Click;
             sendGroup.Controls.Add(txtCustomPacket);
             sendGroup.Controls.Add(btnSendCustomPacket);
-            tabPageManual.Controls.Add(sendGroup);
+            manualPagePanel.Controls.Add(sendGroup); // 스크롤 패널에 추가
 
+            // 수신 시뮬레이션 그룹
             simulationGroup = new GroupBox { Text = "수신 시뮬레이션", Location = new Point(20, 490), Width = 880, Height = 75 };
             simulationGroup.Controls.Add(new Label { Text = "16-byte hex:", Location = new Point(15, 35), AutoSize = true });
             txtSimulatedReceive = new TextBox { Location = new Point(100, 32), Width = 650, Font = new Font("Consolas", 9) };
@@ -210,8 +244,9 @@ namespace AEPQ
             btnProcessSimulatedReceive.Click += BtnProcessSimulatedReceive_Click;
             simulationGroup.Controls.Add(txtSimulatedReceive);
             simulationGroup.Controls.Add(btnProcessSimulatedReceive);
-            tabPageManual.Controls.Add(simulationGroup);
+            manualPagePanel.Controls.Add(simulationGroup); // 스크롤 패널에 추가
 
+            // 마지막으로 필요한 메소드들을 호출합니다.
             LoadPorts();
             InitializeCommandGrid();
         }
