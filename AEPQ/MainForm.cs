@@ -286,6 +286,7 @@ namespace AEPQ
                     }
                     await Task.Delay(200); // 서버 응답 대기
                 }
+                 
 
                 // 3. 좌표 파싱 후 Modbus 132~137 전송
                 string[] blocks = coordinate.Replace("align_end_", "").Split(',');
