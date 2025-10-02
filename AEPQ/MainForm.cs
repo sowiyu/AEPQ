@@ -1,5 +1,4 @@
 ﻿using AEPQ.Services;
-using EasyModbus;
 using log4net.Repository.Hierarchy;
 using MaterialSkin;
 using MaterialSkin.Controls;
@@ -8,6 +7,7 @@ using System.Drawing;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Modbus.Device;
 
 namespace AEPQ
 {
@@ -22,6 +22,7 @@ namespace AEPQ
 
         // --- UI 컨트롤 ---
         private MaterialTabControl tabControl;
+        private MaterialTabSelector tabSelector;
         private TabPage tabPageStart, tabPageManual;
 
         // '시작' 탭 컨트롤
@@ -64,11 +65,20 @@ namespace AEPQ
             this.Text = "AEPQ 통합 제어 프로그램";
             this.ClientSize = new System.Drawing.Size(940, 800);
 
+            // 1. TabControl 생성 (내용 담당)
             tabControl = new MaterialTabControl { Dock = DockStyle.Fill };
             tabPageStart = new TabPage { Text = "시작" };
             tabPageManual = new TabPage { Text = "단동 테스트" };
             tabControl.TabPages.Add(tabPageStart);
-            tabControl.TabPages.Add(tabPageManual); // <-- 빠뜨렸던 코드 추가!
+            tabControl.TabPages.Add(tabPageManual);
+
+            // 2. TabSelector 생성 (헤더/제목 담당)
+            tabSelector = new MaterialTabSelector
+            {
+                BaseTabControl = tabControl, // tabControl과 연결 (가장 중요)
+                Depth = 0,
+                Dock = DockStyle.Top, // 폼 상단에 위치
+            };
 
             txtLog = new RichTextBox
             {
@@ -80,6 +90,8 @@ namespace AEPQ
                 ForeColor = Color.White
             };
 
+            // 3. 폼에 컨트롤 추가 (Selector를 먼저 추가해야 상단에 보임)
+            this.Controls.Add(tabSelector);
             this.Controls.Add(tabControl);
             this.Controls.Add(txtLog);
 
@@ -265,17 +277,27 @@ namespace AEPQ
 
             try
             {
+
+
                 // 1. RS-485 실린더 전진
-                //rs485Service.SendPacket(new CommandData
-                //{
-                //    Description = "케이스 실린더 전진",
-                //    Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
-                //});
-                //Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
-                //await Task.Delay(500);
+                rs485Service.SendPacket(new CommandData
+                {
+                    Description = "케이스 실린더 전진",
+                    Data = new byte[] { 0, 0, 0, 0x02, 0, 0, 0, 0, 0 }
+                });
+                Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+                await Task.Delay(500);
+                rs485Service.SendPacket(new CommandData
+                {
+                    Description = "케이스 실린더 전진",
+                    Data = new byte[] { 0, 0, 0, 0x08, 0, 0, 0, 0, 0 }
+                });
+                Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+                await Task.Delay(500);
 
                 // 2. TCP 얼라인 요청 및 응답 대기
                 string coordinate = "";
+                //coordinate = "align_end_555_111_222,123_45_67";
                 while (true)
                 {
                     coordinate = await tcpService.RequestCoordinate(); // align 요청
@@ -287,6 +309,7 @@ namespace AEPQ
                     await Task.Delay(200); // 서버 응답 대기
                 }
 
+                Thread.Sleep(1000);
                 // 3. 좌표 파싱 후 Modbus 132~137 전송
                 string[] blocks = coordinate.Replace("align_end_", "").Split(',');
                 if (blocks.Length != 2) // 예시 기준 2블록
@@ -306,7 +329,7 @@ namespace AEPQ
                     int rz = int.Parse(vals[2]);
 
                     // 음수 보정
-                    if (x < 0) x = x * -1 + 10000 ;  // -102 → 10102
+                    if (x < 0) x = x * -1 + 10000;  // -102 → 10102
                     if (y < 0) y = 10000 + y * -1;
                     if (rz < 0) rz = 1000 + rz * -1;
 
@@ -314,21 +337,33 @@ namespace AEPQ
 
                     for (int i = 0; i < toWrite.Length; i++)
                     {
-                        try
+                        // --- 안정성 강화: Modbus 쓰기 전 연결 확인 및 재연결 ---
+                        if (!modbusService.IsConnected)
                         {
-                            modbusService.WriteRegister(modbusAddr + i, toWrite[i]);
-                            await Task.Delay(50); // 안정성을 위해 딜레이
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"  - ❌ Modbus 쓰기 오류: {ex.Message}", Color.Red);
-                            if (!modbusService.IsConnected)
+                            Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+                            if (!modbusService.Connect())
                             {
-                                modbusService.Connect();
-                                modbusService.WriteRegister(modbusAddr + i, toWrite[i]);
-                                Log($"  - 재시도: {ex.Message}", Color.Red);
+                                Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+                                return; // 재연결 실패 시 작업 중단
                             }
                         }
+
+                        // 쓰기 시도
+                        if (!modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
+                        {
+                            // 쓰기 실패 시 한 번 더 재연결 및 재시도
+                            Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+                            if (modbusService.Connect() && modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
+                            {
+                                Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+                            }
+                            else
+                            {
+                                Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {modbusAddr + i}). 동작을 중단합니다.", Color.Red);
+                                return; // 최종 실패 시 작업 중단
+                            }
+                        }
+                        await Task.Delay(50); // 안정성을 위해 딜레이
                     }
 
                     modbusAddr += 3;
@@ -340,8 +375,15 @@ namespace AEPQ
                 Log("  - Modbus: 130번에 1 써서 로봇 동작 시작", Color.DarkBlue);
 
                 // 5. Modbus 150번 모니터링 후 130 초기화
+                int a = 0;
                 while (true)
                 {
+                    //a++;
+                    //if (a > 2)
+                    //{
+                    //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+                    //    break;
+                    //}
                     int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
                     if (readVal != null && readVal.Length > 0 && readVal[0] == 1)
                     {
@@ -349,22 +391,44 @@ namespace AEPQ
                         Log("  - Modbus: 150번=1 확인, 130번 초기화", Color.DarkBlue);
                         break;
                     }
-                    await Task.Delay(200);
+                    await Task.Delay(2000);
                 }
 
-                // 6. RS-485 실린더 전진 → 후진
-                //rs485Service.SendPacket(new CommandData
-                //{
-                //    Description = "케이스 실린더 전진",
-                //    Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
-                //});
-                //await Task.Delay(500);
-                //rs485Service.SendPacket(new CommandData
-                //{
-                //    Description = "케이스 실린더 후진",
-                //    Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 }
-                //});
-                //Log("  - RS-485: 실린더 전진 → 후진 완료", Color.DarkBlue);
+
+
+                while (true)
+                {
+                    //a++;
+                    //if (a > 2)
+                    //{
+                    //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+                    //    break;
+                    //}
+                    int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+                    if (readVal != null && readVal.Length > 0 && readVal[0] == 0)
+                    {
+                        Log("  - Modbus: 150번=0 확인", Color.DarkBlue);
+                        // 5. RS-485 실린더 후진
+                        rs485Service.SendPacket(new CommandData
+                        {
+                            Description = "케이스 실린더 후진",
+                            Data = new byte[] { 0, 0, 0, 0x01, 0, 0, 0, 0, 0 }
+                        });
+                        Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+                        await Task.Delay(500);
+                        rs485Service.SendPacket(new CommandData
+                        {
+                            Description = "케이스 실린더 후진",
+                            Data = new byte[] { 0, 0, 0, 0x04, 0, 0, 0, 0, 0 }
+                        });
+                        Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+                        await Task.Delay(500);
+                        break;
+                    }
+                    await Task.Delay(2000);
+                }
+
+
 
                 Log("✅ 동작 1 완료!", Color.Green);
             }
@@ -376,17 +440,170 @@ namespace AEPQ
 
 
 
-
-
-
-
-
-
-
-        private void BtnStartOperation2_Click(object sender, EventArgs e)
+        private async void BtnStartOperation2_Click(object sender, EventArgs e)
         {
+            if (rs485Service == null || !rs485Service.IsOpen)
+            {
+                Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange);
+                return;
+            }
+
+            if (tcpService == null || !tcpService.IsConnected)
+            {
+                Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange);
+                return;
+            }
+
+            if (modbusService == null || !modbusService.IsConnected)
+            {
+                Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange);
+                return;
+            }
+
             Log("▶️ 동작 2 시작...", Color.DarkCyan);
+
+            try
+            {
+                // 1. RS-485 실린더 전진 명령 전송
+                rs485Service.SendPacket(new CommandData
+                {
+                    Description = "동작2 실린더 up",
+                    Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
+                });
+                Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
+
+                await Task.Delay(50);
+                Thread.Sleep(1000);
+
+                rs485Service.SendPacket(new CommandData
+                {
+                    Description = "동작2 실린더 전진",
+                    Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 }
+                });
+                Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+                await Task.Delay(50);
+
+                Thread.Sleep(1000);
+
+                rs485Service.SendPacket(new CommandData
+                {
+                    Description = "동작2 실린더 down",
+                    Data = new byte[] { 0, 0, 0, 0x20, 0, 0, 0, 0, 0 }
+                });
+                Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
+
+
+                await Task.Delay(100); // 명령 후 안정화 시간
+
+                // 1-1. RS-485 응답 확인 (실린더 상태값 Read)
+                // → 여기서 실제 장비 응답 패킷 파싱하는 로직 넣으시면 됨
+                // ex) byte[] resp = rs485Service.ReadPacket();
+                // Log($"실린더 응답: {BitConverter.ToString(resp)}", Color.Gray);
+
+                //byte[] resp = rs485Service.ReadPacket();
+
+
+                // 2. Modbus 130번에 2 써서 로봇 동작 시작
+                modbusService.WriteRegister(130, 2);
+                Log("  - Modbus: 130번에 2 쓰기 (로봇 동작 시작)", Color.DarkBlue);
+
+                if (!modbusService.IsConnected)
+                {
+                    Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+                    if (!modbusService.Connect())
+                    {
+                        Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+                        return; // 재연결 실패 시 작업 중단
+                    }
+                }
+
+                // 쓰기 시도
+                if (!modbusService.WriteRegister(130,2))
+                {
+                    // 쓰기 실패 시 한 번 더 재연결 및 재시도
+                    Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+                    if (modbusService.Connect() && modbusService.WriteRegister(130,2))
+                    {
+                        Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+                    }
+                    else
+                    {
+                        Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {130}). 동작을 중단합니다.", Color.Red);
+                        return; // 최종 실패 시 작업 중단
+                    }
+                }
+                await Task.Delay(50); // 안정성을 위해 딜레이
+
+
+
+                // 3. Modbus 150번 모니터링 후 130 초기화
+                int retry = 0;
+                while (true)
+                {
+                    //retry++;
+                    //if (retry > 20) // 20회 × 200ms = 4초 타임아웃
+                    //{
+                    //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+                    //    break;
+                    //}
+
+                    int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+
+                    if (readVal != null && readVal.Length > 0 && readVal[0] == 2)
+                    {
+                        modbusService.WriteRegister(130, 0); // 초기화
+                        Log("  - Modbus: 150번=2 확인 → 130번 초기화 완료", Color.DarkBlue);
+                        break;
+                    }
+
+                    await Task.Delay(200); // 폴링 대기
+                }
+
+                while (true)
+                {
+                    //retry++;
+                    //if (retry > 20) // 20회 × 200ms = 4초 타임아웃
+                    //{
+                    //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+                    //    break;
+                    //}
+                    int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+                    if (readVal != null && readVal.Length > 0 && readVal[0] == 0)
+                    {
+                        Log("  - Modbus: 150번=0 확인", Color.DarkBlue);
+                        // 1. RS-485 실린더 후진/ down 명령 전송
+                        rs485Service.SendPacket(new CommandData
+                        {
+                            Description = "동작2 실린더 up",
+                            Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
+                        });
+                        Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
+
+                        await Task.Delay(50);
+                        Thread.Sleep(1000);
+                        rs485Service.SendPacket(new CommandData
+                        {
+                            Description = "동작2 실린더 후진",
+                            Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
+                        });
+                        Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+
+                        await Task.Delay(100); // 명령 후 안정화 시간
+                        break;
+                    }
+                    await Task.Delay(200); // 폴링 대기
+                }
+
+
+                Log("✅ 동작 2 완료!", Color.Green);
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ 동작 2 중 오류 발생: {ex.Message}", Color.Red);
+            }
         }
+
+
         #endregion
 
         #region 단동 테스트 탭 이벤트
@@ -575,4 +792,3 @@ namespace AEPQ
         #endregion
     }
 }
-

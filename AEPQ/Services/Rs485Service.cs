@@ -20,40 +20,42 @@ namespace AEPQ.Services
     /// </summary>
     public static class Crc16Buypass
     {
-        private const ushort Polynomial = 0x8005;
+        private const ushort Polynomial = 0x8005; // CRC-16/BUYPASS 폴리노미얼
         private static readonly ushort[] Table = new ushort[256];
 
         static Crc16Buypass()
         {
             for (ushort i = 0; i < 256; ++i)
             {
-                ushort value = 0;
-                ushort temp = (ushort)(i << 8);
-                for (byte j = 0; j < 8; ++j)
+                ushort crc = i;
+                for (int j = 0; j < 8; j++)
                 {
-                    if (((value ^ temp) & 0x8000) != 0)
-                    {
-                        value = (ushort)((value << 1) ^ Polynomial);
-                    }
+                    if ((crc & 0x0001) != 0)
+                        crc = (ushort)((crc >> 1) ^ Polynomial);
                     else
-                    {
-                        value <<= 1;
-                    }
-                    temp <<= 1;
+                        crc >>= 1;
                 }
-                Table[i] = value;
+                Table[i] = crc;
             }
         }
 
         public static ushort ComputeChecksum(byte[] bytes)
         {
-            ushort crc = 0;
+            ushort crc = 0x0000; // 초기값
             foreach (byte b in bytes)
             {
-                crc = (ushort)((crc << 8) ^ Table[((crc >> 8) ^ b) & 0xFF]);
+                crc ^= (ushort)(b << 8);
+                for (int i = 0; i < 8; i++)
+                {
+                    if ((crc & 0x8000) != 0)
+                        crc = (ushort)((crc << 1) ^ 0x8005);
+                    else
+                        crc <<= 1;
+                }
             }
             return crc;
         }
+
     }
 
     public class Rs485Service
@@ -71,7 +73,9 @@ namespace AEPQ.Services
         private const byte SEND_STX = 0x22, SEND_ETX = 0x33, SEND_ADDR = 0x03, SEND_CMD = 0x85;
         private const byte RECV_STX = 0x44;
         private const int PACKET_LENGTH = 16;
-        private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFA, 0x12, 0x00, 0x00, 0x1B, 0x99, 0x55 };
+        // --- 자동 모드 트리거 신호 정의 ---
+        private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x1A, 0x00, 0x00, 0x57, 0x3A, 0x55 };
+        private readonly byte[] triggerSignal2 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x0A, 0x04, 0x00, 0x4E, 0x7A, 0x55 };
 
         public bool IsOpen => serialPort.IsOpen;
 
@@ -210,7 +214,24 @@ namespace AEPQ.Services
 
         private void ProcessPacket(byte[] packet)
         {
+            // 로그는 찍되
             logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
+
+            // --- 주소 필터링 추가 ---
+            if (packet.Length < 4)
+            {
+                logger("⚠ 잘못된 패킷 수신 (길이 부족)", Color.Orange);
+                return;
+            }
+
+            byte addr = packet[2]; // 수신 패킷의 Addr은 [2]번 위치
+            if (addr != 0x03)
+            {
+                logger($"⚠ 무시됨: Addr={addr:X2} (03만 처리)", Color.Gray);
+                return;
+            }
+            // -----------------------
+
             if (IsAutoModeRunning)
             {
                 HandleAutoMode1(packet);
@@ -218,13 +239,16 @@ namespace AEPQ.Services
             }
         }
 
+
         private void HandleAutoMode1(byte[] packet)
         {
             if (currentAutoModeState2 != AutoModeState.Idle) return;
+            byte triggerByte = packet[10];
             switch (currentAutoModeState1)
             {
                 case AutoModeState.Idle:
-                    if (packet.SequenceEqual(triggerSignal1))
+
+                    if ((triggerByte & 0xF0) == 0x10)
                     {
                         logger("✨ 핸드툴 1차 눌림 감지! (모드1)", Color.Magenta);
                         SendPacket(new CommandData { Description = "이젝터 3+4 동시 진공", Data = new byte[] { 0, 0x50, 0, 0, 0, 0, 0, 0, 0 } });
@@ -232,14 +256,14 @@ namespace AEPQ.Services
                     }
                     break;
                 case AutoModeState.VacuumsOn:
-                    if (!packet.SequenceEqual(triggerSignal1))
+                    if ((triggerByte & 0xF0) != 0x10)
                     {
                         logger("...핸드툴 릴리즈 감지. (모드1)", Color.CornflowerBlue);
                         currentAutoModeState1 = AutoModeState.ReadyForBreak;
                     }
                     break;
                 case AutoModeState.ReadyForBreak:
-                    if (packet.SequenceEqual(triggerSignal1))
+                    if ((triggerByte & 0xF0) == 0x10)
                     {
                         logger("✨ 핸드툴 2차 눌림 감지! (모드1)", Color.Magenta);
                         currentAutoModeState1 = AutoModeState.Breaking;
@@ -259,13 +283,14 @@ namespace AEPQ.Services
         private void HandleAutoMode2(byte[] packet)
         {
             if (currentAutoModeState1 != AutoModeState.Idle) return;
-            byte triggerByte = packet[10]; // Data[6]
+            byte triggerByte = packet[11]; // Data[6]
             switch (currentAutoModeState2)
             {
                 case AutoModeState.Idle:
                     if (triggerByte == 0x04)
                     {
                         logger("✨ 핸드툴 1차 눌림 감지! (모드2)", Color.Tomato);
+
                         SendPacket(new CommandData { Description = "이젝터 5+6 동시 진공", Data = new byte[] { 0, 0, 0x05, 0, 0, 0, 0, 0, 0 } });
                         currentAutoModeState2 = AutoModeState.VacuumsOn;
                     }
@@ -298,23 +323,28 @@ namespace AEPQ.Services
 
         public void SendPacket(CommandData command)
         {
+            if (serialPort == null || !serialPort.IsOpen) { return; }
             try
             {
                 byte[] packet = new byte[16];
                 byte[] data = command.Data;
                 byte[] crcData = new byte[12];
-                crcData[0] = 0x10; crcData[1] = 0x03; crcData[2] = 0x85;
+                crcData[0] = 0x10; crcData[1] = SEND_ADDR; crcData[2] = SEND_CMD;
                 Buffer.BlockCopy(data, 0, crcData, 3, data.Length);
                 ushort crcValue = Crc16Buypass.ComputeChecksum(crcData);
                 packet[0] = SEND_STX; packet[1] = 0x10; packet[2] = SEND_ADDR; packet[3] = SEND_CMD;
                 Buffer.BlockCopy(data, 0, packet, 4, data.Length);
-                packet[13] = (byte)(crcValue >> 8);
-                packet[14] = (byte)(crcValue & 0xFF);
+                packet[13] = (byte)((crcValue >> 8) & 0xFF); packet[14] = (byte)(crcValue & 0xFF);
                 packet[15] = SEND_ETX;
+                serialPort.Write(packet, 0, packet.Length);
 
-                SendRawPacket(packet, command.Description);
+                // 로그 필터링
+                // if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
+                // {
+                logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                // }
             }
-            catch (Exception ex) { logger($"❌ RS-485 전송 실패: {ex.Message}", Color.Red); }
+            catch (Exception ex) { logger($"❌ 전송 실패: {ex.Message}", Color.Red); }
         }
 
         public void SendRawPacket(byte[] packet, string description)
