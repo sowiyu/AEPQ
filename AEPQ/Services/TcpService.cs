@@ -51,7 +51,8 @@ namespace AEPQ.Services
         }
 
         // TODO: 실제 프로토콜에 맞게 이 메서드를 구현해야 합니다.
-        public async Task<string> RequestCoordinate()
+        // int position 인자를 받도록 메소드 시그니처를 변경합니다.
+        public async Task<string> RequestCoordinate(int position)
         {
             if (!IsConnected)
             {
@@ -61,12 +62,24 @@ namespace AEPQ.Services
 
             try
             {
-                // 1. 요청 메시지 보내기
-                byte[] requestData = Encoding.ASCII.GetBytes("align\r"); // 예시 요청
-                await stream.WriteAsync(requestData, 0, requestData.Length);
-                logger("  - TCP/IP: 좌표값 요청 전송", Color.CornflowerBlue);
+                // --- ★★★ 여기가 핵심 변경 사항입니다 ★★★ ---
+                // position 값에 따라 보낼 메시지를 결정합니다.
+                string requestMessage = "align"; // 기본값 (position == 0)
+                if (position == 1)
+                {
+                    requestMessage = "align1";
+                }
+                else if (position == 2)
+                {
+                    requestMessage = "align2";
+                }
 
-                // 2. 응답 메시지 받기
+                // 1. 요청 메시지 보내기
+                byte[] requestData = Encoding.ASCII.GetBytes(requestMessage + "\r");
+                await stream.WriteAsync(requestData, 0, requestData.Length);
+                logger($"  - TCP/IP: 좌표값 요청 전송 ('{requestMessage}')", Color.CornflowerBlue);
+
+                // 2. 응답 메시지 받기 (기존과 동일)
                 byte[] buffer = new byte[1024];
                 int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                 string response = Encoding.ASCII.GetString(buffer, 0, bytesRead);

@@ -38,6 +38,7 @@ namespace AEPQ
         private ComboBox cmbPortStart;
         private Button btnRs485ConnectStart, btnRs485DisconnectStart, btnRs485RefreshStart;
         private Button btnStartOperation1, btnStartOperation2;
+        private Button btnStartPosition1, btnStartPosition2; // <-- 이 줄 추가
         private RichTextBox txtLog;
 
         // '단동 테스트' 탭 컨트롤
@@ -115,6 +116,7 @@ namespace AEPQ
             // 6. 탭 페이지 초기화
             InitializeStartTab();
             InitializeManualTestTab();
+            this.Load += MainForm_Load;
         }
 
         #region UI 초기화
@@ -153,6 +155,7 @@ namespace AEPQ
             groupTcp = new GroupBox { Text = "TCP/IP 연결 (좌표)", Location = new Point(640, 20), Width = 280, Height = 120 };
             groupTcp.Controls.Add(new Label { Text = "IP:Port", Location = new Point(15, 35), AutoSize = true });
             txtTcpIp = new TextBox { Text = "127.0.0.1", Location = new Point(65, 32), Width = 120 };
+
             txtTcpPort = new TextBox { Text = "20001", Location = new Point(195, 32), Width = 60 };
             btnTcpConnect = new Button { Text = "연결", Location = new Point(15, 70), Width = 120 };
             btnTcpConnect.Click += BtnTcpConnect_Click;
@@ -164,10 +167,24 @@ namespace AEPQ
             groupTcp.Controls.Add(btnTcpDisconnect);
             tabPageStart.Controls.Add(groupTcp);
 
-            btnStartOperation1 = new Button { Text = "투입 시작", Location = new Point(50, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
-            btnStartOperation1.Click += BtnStartOperation1_Click;
-            btnStartOperation2 = new Button { Text = "추출 시작", Location = new Point(480, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
+            // 1. '위치 시작' 버튼 2개 생성
+            btnStartPosition1 = new Button { Text = "1 위치 시작", Location = new Point(50, 160), Width = 195, Height = 60, Font = new Font(this.Font.FontFamily, 16, FontStyle.Bold) };
+            btnStartPosition1.Click += (s, e) => StartOperation1WithPosition(1);
+
+            btnStartPosition2 = new Button { Text = "2 위치 시작", Location = new Point(255, 160), Width = 195, Height = 60, Font = new Font(this.Font.FontFamily, 16, FontStyle.Bold) };
+            btnStartPosition2.Click += (s, e) => StartOperation1WithPosition(2);
+
+            // 2. '위치 지정 안함' 버튼 생성 (기존 btnStartOperation1 역할)
+            btnStartOperation1 = new Button { Text = "동작 1 (위치 미지정)", Location = new Point(50, 230), Width = 400, Height = 230, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
+            btnStartOperation1.Click += (s, e) => StartOperation1WithPosition(0);
+
+            // 3. '동작 2 시작' 버튼 생성
+            btnStartOperation2 = new Button { Text = "동작 2 시작", Location = new Point(480, 160), Width = 400, Height = 300, Font = new Font(this.Font.FontFamily, 24, FontStyle.Bold) };
             btnStartOperation2.Click += BtnStartOperation2_Click;
+
+            // 4. 폼에 최종 버튼들 추가
+            tabPageStart.Controls.Add(btnStartPosition1);
+            tabPageStart.Controls.Add(btnStartPosition2);
             tabPageStart.Controls.Add(btnStartOperation1);
             tabPageStart.Controls.Add(btnStartOperation2);
         }
@@ -290,35 +307,220 @@ namespace AEPQ
             btnTcpDisconnect.Enabled = false;
         }
 
-        private async void BtnStartOperation1_Click(object sender, EventArgs e)
+        //private async void BtnStartOperation1_Click(object sender, EventArgs e)
+        //{
+        //    btnStartOperation1.Enabled = false; // 버튼 눌리면 바로 Disable
+        //    btnStartOperation2.Enabled = false; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
+
+        //    Log("▶️ 동작 1 시작...", Color.Blue);
+
+        //    if (rs485Service == null || !rs485Service.IsOpen)
+        //    {
+        //        Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange);
+        //        return;
+        //    }
+
+        //    if (tcpService == null || !tcpService.IsConnected)
+        //    {
+        //        Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange);
+        //        return;
+        //    }
+
+        //    if (modbusService == null || !modbusService.IsConnected)
+        //    {
+        //        Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange);
+        //        return;
+        //    }
+
+        //    try
+        //    {
+
+
+        //        // 1. RS-485 실린더 전진
+        //        rs485Service.SendPacket(new CommandData
+        //        {
+        //            Description = "케이스 실린더 전진",
+        //            Data = new byte[] { 0, 0, 0, 0x02, 0, 0, 0, 0, 0 }
+        //        });
+        //        Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+        //        await Task.Delay(500);
+        //        rs485Service.SendPacket(new CommandData
+        //        {
+        //            Description = "케이스 실린더 전진",
+        //            Data = new byte[] { 0, 0, 0, 0x08, 0, 0, 0, 0, 0 }
+        //        });
+        //        Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
+        //        await Task.Delay(500);
+
+        //        // 2. TCP 얼라인 요청 및 응답 대기
+        //        string coordinate = "";
+        //        //coordinate = "align_end_555_111_222,123_45_67";
+
+        //        while (true)
+        //        {
+        //            coordinate = await tcpService.RequestCoordinate(int position); // align 요청
+
+        //            await Task.Delay(100); // 서버 응답 대기
+        //            if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("PC_Align_align_end"))
+        //            {
+        //                Log($"  - TCP 좌표 응답: {coordinate}", Color.DarkCyan);
+        //                break;
+        //            }
+
+        //        }
+
+
+
+        //        Thread.Sleep(1000);
+        //        // 3. 좌표 파싱 후 Modbus 132~137 전송
+        //        string[] blocks = coordinate.Replace("PC_Align_align_end_", "").Split(',');
+
+        //        Log("  파싱 " + blocks.Length, Color.Red);
+        //        if (blocks.Length != 2) // 예시 기준 2블록
+        //        {
+        //            Log("  - ❌ 좌표 블록 수가 2가 아님: " + blocks.Length, Color.Red);
+        //            return;
+        //        }
+
+        //        int modbusAddr = 132; // 시작 주소
+        //        foreach (var block in blocks)
+        //        {
+        //            var vals = block.Split('_'); // x_y_rz
+        //            if (vals.Length != 3) continue;
+
+        //            int x = int.Parse(vals[0]);
+        //            int y = int.Parse(vals[1]);
+        //            int rz = int.Parse(vals[2]);
+
+        //            // 음수 보정
+        //            if (x < 0) x = x * -1 + 10000;  // -102 → 10102
+        //            if (y < 0) y = 10000 + y * -1;
+        //            if (rz < 0) rz = 1000 + rz * -1;
+
+        //            int[] toWrite = new int[] { x, y, rz };
+
+        //            for (int i = 0; i < toWrite.Length; i++)
+        //            {
+        //                // --- 안정성 강화: Modbus 쓰기 전 연결 확인 및 재연결 ---
+        //                if (!modbusService.IsConnected)
+        //                {
+        //                    Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+        //                    if (!modbusService.Connect())
+        //                    {
+        //                        Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+        //                        return; // 재연결 실패 시 작업 중단
+        //                    }
+        //                }
+
+        //                // 쓰기 시도
+        //                if (!modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
+        //                {
+        //                    // 쓰기 실패 시 한 번 더 재연결 및 재시도
+        //                    Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+        //                    if (modbusService.Connect() && modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
+        //                    {
+        //                        Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+        //                    }
+        //                    else
+        //                    {
+        //                        Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {modbusAddr + i}). 동작을 중단합니다.", Color.Red);
+        //                        return; // 최종 실패 시 작업 중단
+        //                    }
+        //                }
+        //                await Task.Delay(50); // 안정성을 위해 딜레이
+        //            }
+
+        //            modbusAddr += 3;
+        //        }
+        //        Log("  - Modbus: 132~137번에 좌표 전송 완료", Color.DarkBlue);
+
+        //        // 4. Modbus 130번에 1 써서 로봇 동작 시작
+        //        modbusService.WriteRegister(130, 1);
+        //        Log("  - Modbus: 130번에 1 써서 로봇 동작 시작", Color.DarkBlue);
+
+        //        // 5. Modbus 150번 모니터링 후 130 초기화
+        //        int a = 0;
+        //        while (true)
+        //        {
+        //            //a++;
+        //            //if (a > 2)
+        //            //{
+        //            //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+        //            //    break;
+        //            //}
+        //            int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+        //            if (readVal != null && readVal.Length > 0 && readVal[0] == 1)
+        //            {
+        //                modbusService.WriteRegister(130, 0); // 초기화
+        //                Log("  - Modbus: 150번=1 확인, 130번 초기화", Color.DarkBlue);
+        //                break;
+        //            }
+        //            await Task.Delay(2000);
+        //        }
+
+
+
+        //        while (true)
+        //        {
+        //            //a++;
+        //            //if (a > 2)
+        //            //{
+        //            //    Log("  - ❌ Modbus 150번 응답 대기 시간 초과", Color.Red);
+        //            //    break;
+        //            //}
+        //            int[] readVal = modbusService.ReadHoldingRegisters(150, 1);
+        //            if (readVal != null && readVal.Length > 0 && readVal[0] == 0)
+        //            {
+        //                Log("  - Modbus: 150번=0 확인", Color.DarkBlue);
+        //                // 5. RS-485 실린더 후진
+        //                rs485Service.SendPacket(new CommandData
+        //                {
+        //                    Description = "케이스 실린더 후진",
+        //                    Data = new byte[] { 0, 0, 0, 0x01, 0, 0, 0, 0, 0 }
+        //                });
+        //                Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+        //                await Task.Delay(500);
+        //                rs485Service.SendPacket(new CommandData
+        //                {
+        //                    Description = "케이스 실린더 후진",
+        //                    Data = new byte[] { 0, 0, 0, 0x04, 0, 0, 0, 0, 0 }
+        //                });
+        //                Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+        //                await Task.Delay(500);
+        //                btnStartOperation1.Enabled = true; // 버튼 눌리면 바로 Disable
+        //                btnStartOperation2.Enabled = true; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
+        //                break;
+        //            }
+        //            await Task.Delay(2000);
+        //        }
+
+
+
+        //        Log("✅ 동작 1 완료!", Color.Green);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Log($"❌ 동작 1 중 오류 발생: {ex.Message}", Color.Red);
+        //    }
+        //}
+
+
+        // 기존의 private async void BtnStartOperation1_Click(object sender, EventArgs e) 메소드는 삭제합니다.
+        // 그 대신 아래의 새로운 메소드를 추가합니다.
+        private async void StartOperation1WithPosition(int position)
         {
+            string logTitle = position > 0 ? $"▶️ 동작 1 ({position} 위치) 시작..." : "▶️ 동작 1 시작 (위치 지정 안함)...";
+            Log(logTitle, Color.Blue);
             btnStartOperation1.Enabled = false; // 버튼 눌리면 바로 Disable
             btnStartOperation2.Enabled = false; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
 
-            Log("▶️ 동작 1 시작...", Color.Blue);
-
-            if (rs485Service == null || !rs485Service.IsOpen)
-            {
-                Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange);
-                return;
-            }
-
-            if (tcpService == null || !tcpService.IsConnected)
-            {
-                Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange);
-                return;
-            }
-
-            if (modbusService == null || !modbusService.IsConnected)
-            {
-                Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange);
-                return;
-            }
+            // --- 1. 연결 상태 확인 (기존과 동일) ---
+            if (rs485Service == null || !rs485Service.IsOpen) { Log("  - ⚠ RS-485 포트가 연결되지 않았습니다.", Color.Orange); return; }
+            if (tcpService == null || !tcpService.IsConnected) { Log("  - ⚠ TCP/IP (좌표)가 연결되지 않았습니다.", Color.Orange); return; }
+            if (modbusService == null || !modbusService.IsConnected) { Log("  - ⚠ Modbus TCP/IP가 연결되지 않았습니다.", Color.Orange); return; }
 
             try
             {
-
-
                 // 1. RS-485 실린더 전진
                 rs485Service.SendPacket(new CommandData
                 {
@@ -335,89 +537,121 @@ namespace AEPQ
                 Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
                 await Task.Delay(500);
 
-                // 2. TCP 얼라인 요청 및 응답 대기
-                string coordinate = "";
-                //coordinate = "align_end_555_111_222,123_45_67";
 
+                // --- 2. TCP 좌표 수신 (기존과 동일) ---
+                string coordinate = "";
                 while (true)
                 {
-                    coordinate = await tcpService.RequestCoordinate(); // align 요청
-
-                    await Task.Delay(100); // 서버 응답 대기
+                    coordinate = await tcpService.RequestCoordinate(position);
                     if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("PC_Align_align_end"))
                     {
                         Log($"  - TCP 좌표 응답: {coordinate}", Color.DarkCyan);
                         break;
                     }
-                    
+                    await Task.Delay(200);
                 }
+                Log("  - TCP: 좌표값 수신 완료", Color.CornflowerBlue);
+                // --- 3. Position 값에 따라 좌표 파싱 및 Modbus 쓰기 (핵심 로직) ---
+                string payload = coordinate.Replace("PC_Align_align_end_", "");
+                string[] blocks = payload.Split(',');
+                Log($"  - position {position}", Color.DarkCyan);
 
-
-
-                Thread.Sleep(1000);
-                // 3. 좌표 파싱 후 Modbus 132~137 전송
-                string[] blocks = coordinate.Replace("PC_Align_align_end_", "").Split(',');
-                if (blocks.Length != 2) // 예시 기준 2블록
+                // 3-1. '위치 미지정' 버튼 (블록 2개 처리)
+                if (position == 0)
                 {
-                    Log("  - ❌ 좌표 블록 수가 2가 아님: " + blocks.Length, Color.Red);
-                    return;
-                }
-
-                int modbusAddr = 132; // 시작 주소
-                foreach (var block in blocks)
-                {
-                    var vals = block.Split('_'); // x_y_rz
-                    if (vals.Length != 3) continue;
-
-                    int x = int.Parse(vals[0]);
-                    int y = int.Parse(vals[1]);
-                    int rz = int.Parse(vals[2]);
-
-                    // 음수 보정
-                    if (x < 0) x = x * -1 + 10000;  // -102 → 10102
-                    if (y < 0) y = 10000 + y * -1;
-                    if (rz < 0) rz = 1000 + rz * -1;
-
-                    int[] toWrite = new int[] { x, y, rz };
-
-                    for (int i = 0; i < toWrite.Length; i++)
+                    if (blocks.Length != 2)
                     {
-                        // --- 안정성 강화: Modbus 쓰기 전 연결 확인 및 재연결 ---
-                        if (!modbusService.IsConnected)
-                        {
-                            Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
-                            if (!modbusService.Connect())
-                            {
-                                Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
-                                return; // 재연결 실패 시 작업 중단
-                            }
-                        }
+                        Log($"  - ❌ 좌표 블록 수가 2가 아님 (기대값: 2, 실제: {blocks.Length}). 동작을 중단합니다.", Color.Red);
+                        return;
+                    }
+                    await WriteCoordinateBlock(blocks[0], 132); // 첫 번째 블록 -> 132, 133, 134
+                    await WriteCoordinateBlock(blocks[1], 135); // 두 번째 블록 -> 135, 136, 137
+                    Log("  - Modbus: 132~137번에 좌표 전송 완료", Color.DarkBlue);
+                }
+                // 3-2. '1 위치' 또는 '2 위치' 버튼 (블록 1개 처리)
+                else if (position == 1 || position == 2)
+                {
+                    if (blocks.Length != 1)
+                    {
+                        Log($"  - ❌ 좌표 블록 수가 1이 아님 (기대값: 1, 실제: {blocks.Length}). 동작을 중단합니다.", Color.Red);
+                        return;
+                    }
+                    // 위치에 따라 시작 주소 결정
+                    int modbusAddr = (position == 1) ? 132 : 135;
+                    await WriteCoordinateBlock(blocks[0], modbusAddr);
+                    Log($"  - Modbus: {modbusAddr}~{modbusAddr + 2}번에 좌표 전송 완료", Color.DarkBlue);
+                }
 
-                        // 쓰기 시도
-                        if (!modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
+                // --- 4. 위치 준비 신호 보내고 응답 확인 (position 1, 2일 때만) ---
+                if (position == 1 || position == 2)
+                {
+                    Log($"  - Modbus: 131번에 위치 값 {position} 쓰기", Color.DarkCyan);
+                    modbusService.WriteRegister(131, position);
+
+
+
+
+
+
+                    if (!modbusService.IsConnected)
+                    {
+                        Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+                        if (!modbusService.Connect())
                         {
-                            // 쓰기 실패 시 한 번 더 재연결 및 재시도
-                            Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
-                            if (modbusService.Connect() && modbusService.WriteRegister(modbusAddr + i, toWrite[i]))
-                            {
-                                Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
-                            }
-                            else
-                            {
-                                Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {modbusAddr + i}). 동작을 중단합니다.", Color.Red);
-                                return; // 최종 실패 시 작업 중단
-                            }
+                            Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+                            return; // 재연결 실패 시 작업 중단
                         }
-                        await Task.Delay(50); // 안정성을 위해 딜레이
                     }
 
-                    modbusAddr += 3;
-                }
-                Log("  - Modbus: 132~137번에 좌표 전송 완료", Color.DarkBlue);
+                    // 쓰기 시도
+                    if (!modbusService.WriteRegister(131, position))
+                    {
+                        // 쓰기 실패 시 한 번 더 재연결 및 재시도
+                        Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+                        if (modbusService.Connect() && modbusService.WriteRegister(131, position))
+                        {
+                            Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+                        }
+                        else
+                        {
+                            Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {130}). 동작을 중단합니다.", Color.Red);
+                            return; // 최종 실패 시 작업 중단
+                        }
+                    }
 
-                // 4. Modbus 130번에 1 써서 로봇 동작 시작
+
+
+
+
+
+
+                    bool isPositionReady = false;
+                    for (int i = 0; i < 5000; i++) // 최대 1000초 대기
+                    {
+                        int[] readVal = modbusService.ReadHoldingRegisters(151, 1);
+                        if (readVal != null && readVal.Length > 0 && readVal[0] == position)
+                        {
+                            Log($"  - Modbus: 151번={position} 응답 확인.", Color.DarkBlue);
+
+                            isPositionReady = true;
+                            break;
+                        }
+                        await Task.Delay(200);
+                    }
+
+                    if (!isPositionReady)
+                    {
+                        Log($"  - ❌ Modbus: 151번 주소에서 응답 대기 시간 초과. 동작을 중단합니다.", Color.Red);
+                        return;
+                    }
+                }
+
+                // --- 5. 로봇 동작 시작 신호 보내고 응답 확인 (기존과 동일) ---
                 modbusService.WriteRegister(130, 1);
                 Log("  - Modbus: 130번에 1 써서 로봇 동작 시작", Color.DarkBlue);
+                Thread.Sleep(1000);
+                modbusService.WriteRegister(131, 0);
+                Log("  - Modbus: 131번 주소 초기화 완료.", Color.DarkBlue);
 
                 // 5. Modbus 150번 모니터링 후 130 초기화
                 int a = 0;
@@ -438,8 +672,6 @@ namespace AEPQ
                     }
                     await Task.Delay(2000);
                 }
-
-
 
                 while (true)
                 {
@@ -475,8 +707,6 @@ namespace AEPQ
                     await Task.Delay(2000);
                 }
 
-
-
                 Log("✅ 동작 1 완료!", Color.Green);
             }
             catch (Exception ex)
@@ -484,6 +714,69 @@ namespace AEPQ
                 Log($"❌ 동작 1 중 오류 발생: {ex.Message}", Color.Red);
             }
         }
+
+        // 좌표 블록 하나를 파싱해서 Modbus에 쓰는 보조 메소드
+        private async Task WriteCoordinateBlock(string block, int startAddress)
+        {
+            var vals = block.Split('_');
+            if (vals.Length != 3)
+            {
+                Log($"  - ❌ 좌표 포맷 오류: {block}", Color.Red);
+                return; // 오류가 있어도 일단 진행은 되도록 throw 대신 return 사용
+            }
+
+            try
+            {
+                int x = int.Parse(vals[0]);
+                int y = int.Parse(vals[1]);
+                int rz = int.Parse(vals[2]);
+
+                if (x < 0) x = x * -1 + 10000;
+                if (y < 0) y = 10000 + y * -1;
+                if (rz < 0) rz = 1000 + rz * -1;
+
+                int[] toWrite = new int[] { x, y, rz };
+
+                for (int i = 0; i < toWrite.Length; i++)
+                {
+                    // --- 안정성 강화: Modbus 쓰기 전 연결 확인 및 재연결 ---
+                    if (!modbusService.IsConnected)
+                    {
+                        Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+                        if (!modbusService.Connect())
+                        {
+                            Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+                            return; // 재연결 실패 시 작업 중단
+                        }
+                    }
+
+                    // 쓰기 시도
+                    if (!modbusService.WriteRegister(startAddress + i, toWrite[i]))
+                    {
+                        // 쓰기 실패 시 한 번 더 재연결 및 재시도
+                        Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+                        if (modbusService.Connect() && modbusService.WriteRegister(startAddress + i, toWrite[i]))
+                        {
+                            Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+                        }
+                        else
+                        {
+                            Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {startAddress + i}). 동작을 중단합니다.", Color.Red);
+                            return; // 최종 실패 시 작업 중단
+                        }
+                    }
+                    await Task.Delay(50); // 안정성을 위해 딜레이
+                }
+
+
+
+            }
+            catch (Exception ex)
+            {
+                Log($"  - ❌ 좌표 처리 중 오류 ({block}): {ex.Message}", Color.Red);
+            }
+        }
+
 
 
 
@@ -568,11 +861,11 @@ namespace AEPQ
                 }
 
                 // 쓰기 시도
-                if (!modbusService.WriteRegister(130,2))
+                if (!modbusService.WriteRegister(130, 2))
                 {
                     // 쓰기 실패 시 한 번 더 재연결 및 재시도
                     Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
-                    if (modbusService.Connect() && modbusService.WriteRegister(130,2))
+                    if (modbusService.Connect() && modbusService.WriteRegister(130, 2))
                     {
                         Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
                     }
@@ -735,8 +1028,14 @@ namespace AEPQ
             {
                 btnRs485ConnectStart.Enabled = false;
                 btnRs485DisconnectStart.Enabled = true;
-                btnConnectManual.Enabled = false;
                 btnDisconnectManual.Enabled = true;
+
+                cmbPortStart.SelectedIndex = currentCmb.SelectedIndex;
+                cmbPortManual.SelectedIndex = currentCmb.SelectedIndex;
+
+                cmbPortManual.Enabled = false;
+                cmbPortStart.Enabled = false;
+                btnConnectManual.Enabled = false;
             }
         }
 
@@ -745,9 +1044,13 @@ namespace AEPQ
             rs485Service?.Disconnect();
             btnRs485ConnectStart.Enabled = true;
             btnRs485DisconnectStart.Enabled = false;
-            btnConnectManual.Enabled = true;
+            cmbPortStart.Enabled = true;
             btnDisconnectManual.Enabled = false;
+
+            cmbPortManual.Enabled = true;
+            btnConnectManual.Enabled = true;
         }
+
 
         private void DgvCommands_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
@@ -814,6 +1117,21 @@ namespace AEPQ
         #endregion
 
         #region 공용 메서드
+
+        private void MainForm_Load(object sender, EventArgs e)
+        {
+            // "COM3"이 있는 경우 자동으로 연결 시도
+            if (cmbPortStart.Items.Contains("COM9"))
+            {
+                cmbPortStart.SelectedItem = "COM9";
+                btnRs485ConnectStart.PerformClick();
+            }
+            // 모드버스 자동연결 시도
+            btnModbusConnect.PerformClick();
+            // TCP 자동연결 시도
+            btnTcpConnect.PerformClick();
+        }
+
         public void Log(string message, Color color)
         {
             if (IsDisposed || !IsHandleCreated) return;
