@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO.Ports;
 using System.Linq;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -63,6 +64,7 @@ namespace AEPQ.Services
         private enum AutoModeState { Idle, VacuumsOn, ReadyForBreak, Breaking }
         private AutoModeState currentAutoModeState1 = AutoModeState.Idle;
         private AutoModeState currentAutoModeState2 = AutoModeState.Idle;
+        private AutoModeState currentAutoModeStateTest = AutoModeState.Idle;
         public bool IsAutoModeRunning { get; private set; } = false;
 
         private readonly SerialPort serialPort;
@@ -74,9 +76,10 @@ namespace AEPQ.Services
         private const byte RECV_STX = 0x44;
         private const int PACKET_LENGTH = 16;
         // --- 자동 모드 트리거 신호 정의 ---
-        private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x1A, 0x00, 0x00, 0x57, 0x3A, 0x55 };
-        private readonly byte[] triggerSignal2 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x0A, 0x04, 0x00, 0x4E, 0x7A, 0x55 };
-
+        //private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x1A, 0x00, 0x00, 0x57, 0x3A, 0x55 };
+        //private readonly byte[] triggerSignal2 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x0A, 0x04, 0x00, 0x4E, 0x7A, 0x55 };
+        private byte[] outputState1 = new byte[9];
+        private byte[] outputState2 = new byte[9];
         public bool IsOpen => serialPort.IsOpen;
 
         public Rs485Service(Action<string, Color> logAction)
@@ -138,40 +141,12 @@ namespace AEPQ.Services
             {
                 try
                 {
-                    // 모드 1 유지 명령
-                    if (currentAutoModeState1 == AutoModeState.VacuumsOn ||
-                        currentAutoModeState1 == AutoModeState.ReadyForBreak)
-                    {
-                        SendPacket(new CommandData
-                        {
-                            Description = "상태 유지 1",
-                            Data = new byte[] { 0, 0x50, 0, 0, 0, 0, 0, 0, 0 }
-                        });
-                    }
+       
+                    // 이 메소드는 outputState1과 outputState2를 보고 알아서
+                    // '둘 다 끔', '1번만 켬', '2번만 켬', '둘 다 켬' 상태를 조합하여 보내줍니다.
+                    UpdateAndSendCombinedOutput("상태 유지 Polling");
 
-                    // 모드 2 유지 명령
-                    if (currentAutoModeState2 == AutoModeState.VacuumsOn ||
-                        currentAutoModeState2 == AutoModeState.ReadyForBreak)
-                    {
-                        SendPacket(new CommandData
-                        {
-                            Description = "상태 유지 2",
-                            Data = new byte[] { 0, 0, 0x05, 0, 0, 0, 0, 0, 0 }
-                        });
-                    }
-
-                    // 둘 다 Idle 상태면 상태 요청만 보냄
-                    if (currentAutoModeState1 == AutoModeState.Idle &&
-                        currentAutoModeState2 == AutoModeState.Idle)
-                    {
-                        SendPacket(new CommandData
-                        {
-                            Description = "상태 요청",
-                            Data = new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
-                        });
-                    }
-
-                    await Task.Delay(30, token);
+                    await Task.Delay(100, token); // 3초는 너무 길 수 있으므로 1초로 줄이는 것을 권장합니다.
                 }
                 catch (TaskCanceledException)
                 {
@@ -237,121 +212,148 @@ namespace AEPQ.Services
 
         private void ProcessPacket(byte[] packet)
         {
-            // 로그는 찍되
-            //logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
-
-            // --- 주소 필터링 추가 ---
-            if (packet.Length < 4)
-            {
-                logger("⚠ 잘못된 패킷 수신 (길이 부족)", Color.Orange);
-                return;
-            }
-
-            byte addr = packet[2]; // 수신 패킷의 Addr은 [2]번 위치
-            if (addr != 0x03)
-            {
-                logger($"⚠ 무시됨: Addr={addr:X2} (03만 처리)", Color.Gray);
-                return;
-            }
-            // -----------------------
+            logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
+            if (packet.Length < 12) return; // 최소 길이를 확인하여 안정성 확보
 
             if (IsAutoModeRunning)
             {
-                HandleAutoMode1(packet);
-                HandleAutoMode2(packet);
+                // 각 핸드툴의 트리거 신호가 있는지 미리 확인
+                bool trigger1 = (packet[10] & 0xF0) == 0x10;
+                bool trigger2 = (packet[11] & 0x0F) == 0x04;
+
+                // --- ★★★ 여기가 핵심 수정 사항 ★★★ ---
+                // 1. 동시 시작 조건: 두 트리거가 모두 감지되고, 두 모드가 모두 대기 상태일 때
+                if (trigger1 && trigger2 && currentAutoModeState1 == AutoModeState.Idle && currentAutoModeState2 == AutoModeState.Idle)
+                {
+                    logger("✨ 핸드툴 1+2 동시 눌림 감지!", Color.Cyan);
+
+                    // 두 상태를 한 번에 업데이트
+                    outputState1 = new byte[] { 0, 0x50, 0, 0, 0, 0, 0, 0, 0 };
+                    outputState2 = new byte[] { 0, 0, 0x05, 0, 0, 0, 0, 0, 0 };
+                    UpdateAndSendCombinedOutput("핸드툴 1+2 동시 진공 ON");
+
+                    // 두 모드의 상태를 모두 변경
+                    currentAutoModeState1 = AutoModeState.VacuumsOn;
+                    currentAutoModeState2 = AutoModeState.VacuumsOn;
+                }
+                // 2. 동시 시작 조건이 아닐 경우에만 개별 핸들러 호출
+                else
+                {
+                    HandleAutoMode1(packet);
+                    HandleAutoMode2(packet);
+                }
             }
         }
 
 
-private void HandleAutoMode1(byte[] packet)
-{
-    // if (currentAutoModeState2 != AutoModeState.Idle) return; // <--- 이 줄을 삭제하여 다른 모드의 방해를 받지 않도록 합니다.
-
-    byte triggerByte = packet[10]; // 핸드툴 1의 트리거 바이트
-
-    switch (currentAutoModeState1)
-    {
-        case AutoModeState.Idle:
-            if ((triggerByte & 0xF0) == 0x10)
+        private void HandleAutoMode1(byte[] packet)
+        {
+            // 이 핸들러는 자신의 상태가 Idle일 때만 첫 동작을 시작해야 함
+            if (currentAutoModeState1 != AutoModeState.Idle && currentAutoModeState1 != AutoModeState.VacuumsOn && currentAutoModeState1 != AutoModeState.ReadyForBreak)
             {
-                logger("✨ 핸드툴 1차 눌림 감지! (모드1)", Color.Magenta);
-                SendPacket(new CommandData { Description = "이젝터 3+4 동시 진공", Data = new byte[] { 0, 0x50, 0, 0, 0, 0, 0, 0, 0 } });
-                currentAutoModeState1 = AutoModeState.VacuumsOn;
+                return;
             }
-            break;
 
-        case AutoModeState.VacuumsOn:
-            if ((triggerByte & 0xF0) != 0x10)
+
+            byte triggerByte1 = packet[10];
+
+            switch (currentAutoModeState1)
             {
-                logger("...핸드툴 릴리즈 감지. (모드1)", Color.CornflowerBlue);
-                currentAutoModeState1 = AutoModeState.ReadyForBreak;
-            }
-            break;
+                case AutoModeState.Idle:
+                    // 오직 핸드툴 1의 신호만 확인
+                    if ((triggerByte1 & 0xF0) == 0x10)
+                    {
+                        logger("✨ 핸드툴 1차 눌림 감지! (모드1)", Color.Magenta);
+                        outputState1 = new byte[] { 0, 0x50, 0, 0, 0, 0, 0, 0, 0 };
+                        UpdateAndSendCombinedOutput("핸드툴 1 진공 ON");
+                        currentAutoModeState1 = AutoModeState.VacuumsOn;
+                    }
+                    break;
 
-        case AutoModeState.ReadyForBreak:
-            if ((triggerByte & 0xF0) == 0x10)
+                case AutoModeState.VacuumsOn:
+                    if ((triggerByte1 & 0xF0) != 0x10)
+                    {
+                        logger("...핸드툴 릴리즈 감지. (모드1)", Color.CornflowerBlue);
+                        currentAutoModeState1 = AutoModeState.ReadyForBreak;
+                    }
+                    break;
+
+                case AutoModeState.ReadyForBreak:
+                    if ((triggerByte1 & 0xF0) == 0x10)
+                    {
+                        logger("✨ 핸드툴 2차 눌림 감지! (모드1)", Color.Magenta);
+                        currentAutoModeState1 = AutoModeState.Breaking;
+                        Task.Run(async () =>
+                        {
+                            outputState1 = new byte[] { 0, 0xA0, 0, 0, 0, 0, 0, 0, 0 };
+                            UpdateAndSendCombinedOutput("핸드툴 1 파기");
+                            await Task.Delay(1000);
+
+                            outputState1 = new byte[9];
+                            UpdateAndSendCombinedOutput("핸드툴 1 리셋");
+                            currentAutoModeState1 = AutoModeState.Idle;
+                            logger("✅ 자동 모드 1 사이클 완료.", Color.Green);
+                        });
+                    }
+                    break;
+
+                case AutoModeState.Breaking: break;
+            }
+        }
+
+        private void HandleAutoMode2(byte[] packet)
+        {
+            if (currentAutoModeState2 != AutoModeState.Idle && currentAutoModeState2 != AutoModeState.VacuumsOn && currentAutoModeState2 != AutoModeState.ReadyForBreak)
             {
-                logger("✨ 핸드툴 2차 눌림 감지! (모드1)", Color.Magenta);
-                currentAutoModeState1 = AutoModeState.Breaking;
-                Task.Run(async () =>
-                {
-                    SendPacket(new CommandData { Description = "이젝터 3+4 동시 파기", Data = new byte[] { 0, 0xA0, 0, 0, 0, 0, 0, 0, 0 } });
-                    await Task.Delay(1000);
-                    SendPacket(new CommandData { Description = "명령 리셋", Data = new byte[9] { 0, 0, 0, 0, 0, 0, 0, 0, 0 } });
-                    currentAutoModeState1 = AutoModeState.Idle;
-                    logger("✅ 자동 모드 1 사이클 완료.", Color.Green);
-                });
+                return;
             }
-            break;
 
-        case AutoModeState.Breaking: break;
-    }
-}
+            byte triggerByte2 = packet[11];
 
-private void HandleAutoMode2(byte[] packet)
-{
-    // if (currentAutoModeState1 != AutoModeState.Idle) return; // <--- 이 줄을 삭제하여 다른 모드의 방해를 받지 않도록 합니다.
-
-    byte triggerByte = packet[11]; // 핸드툴 2의 트리거 바이트
-
-    switch (currentAutoModeState2)
-    {
-        case AutoModeState.Idle:
-            if ((triggerByte & 0x0F) == 0x04)
+            switch (currentAutoModeState2)
             {
-                logger("✨ 핸드툴 1차 눌림 감지! (모드2)", Color.Tomato);
-                SendPacket(new CommandData { Description = "이젝터 5+6 동시 진공", Data = new byte[] { 0, 0, 0x05, 0, 0, 0, 0, 0, 0 } });
-                currentAutoModeState2 = AutoModeState.VacuumsOn;
-            }
-            break;
+                case AutoModeState.Idle:
+                    // 오직 핸드툴 2의 신호만 확인
+                    if ((triggerByte2 & 0x0F) == 0x04)
+                    {
+                        logger("✨ 핸드툴 1차 눌림 감지! (모드2)", Color.Tomato);
+                        outputState2 = new byte[] { 0, 0, 0x05, 0, 0, 0, 0, 0, 0 };
+                        UpdateAndSendCombinedOutput("핸드툴 2 진공 ON");
+                        currentAutoModeState2 = AutoModeState.VacuumsOn;
+                    }
+                    break;
 
-        case AutoModeState.VacuumsOn:
-            if ((triggerByte & 0x0F) != 0x04)
-            {
-                logger("...핸드툴 릴리즈 감지. (모드2)", Color.LightSalmon);
-                currentAutoModeState2 = AutoModeState.ReadyForBreak;
-            }
-            break;
+                case AutoModeState.VacuumsOn:
+                    if ((triggerByte2 & 0x0F) != 0x04)
+                    {
+                        logger("...핸드툴 릴리즈 감지. (모드2)", Color.LightSalmon);
+                        currentAutoModeState2 = AutoModeState.ReadyForBreak;
+                    }
+                    break;
 
-        case AutoModeState.ReadyForBreak:
-            if ((triggerByte & 0x0F) == 0x04)
-            {
-                logger("✨ 핸드툴 2차 눌림 감지! (모드2)", Color.Tomato);
-                currentAutoModeState2 = AutoModeState.Breaking;
-                Task.Run(async () =>
-                {
-                    SendPacket(new CommandData { Description = "이젝터 5+6 동시 파기", Data = new byte[] { 0, 0, 0x0A, 0, 0, 0, 0, 0, 0 } });
-                    await Task.Delay(1000);
-                    SendPacket(new CommandData { Description = "명령 리셋", Data = new byte[9] { 0, 0, 0, 0, 0, 0, 0, 0, 0 } });
-                    currentAutoModeState2 = AutoModeState.Idle;
-                    logger("✅ 자동 모드 2 사이클 완료.", Color.Green);
-                });
+                case AutoModeState.ReadyForBreak:
+                    if ((triggerByte2 & 0x0F) == 0x04)
+                    {
+                        logger("✨ 핸드툴 2차 눌림 감지! (모드2)", Color.Tomato);
+                        currentAutoModeState2 = AutoModeState.Breaking;
+                        Task.Run(async () =>
+                        {
+                            outputState2 = new byte[] { 0, 0, 0x0A, 0, 0, 0, 0, 0, 0 };
+                            UpdateAndSendCombinedOutput("핸드툴 2 파기");
+                            await Task.Delay(1000);
+
+                            outputState2 = new byte[9];
+                            UpdateAndSendCombinedOutput("핸드툴 2 리셋");
+                            currentAutoModeState2 = AutoModeState.Idle;
+                            logger("✅ 자동 모드 2 사이클 완료.", Color.Green);
+                        });
+                    }
+                    break;
+
+                case AutoModeState.Breaking: break;
             }
-            break;
-            
-        case AutoModeState.Breaking: break;
-    }
-}
+        }
+
 
         public void SendPacket(CommandData command)
         {
@@ -373,11 +375,13 @@ private void HandleAutoMode2(byte[] packet)
                 // 로그 필터링
                 // if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
                 // {
-                //logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
                 // }
             }
             catch (Exception ex) { logger($"❌ 전송 실패: {ex.Message}", Color.Red); }
         }
+
+
 
         public void SendRawPacket(byte[] packet, string description)
         {
@@ -388,14 +392,25 @@ private void HandleAutoMode2(byte[] packet)
                     serialPort.Write(packet, 0, packet.Length);
                     if (!description.Contains("Polling") && !description.Contains("유지"))
                     {
-                        logger($"📤 [{description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                        //logger($"📤 [{description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
                     }
                 }
                 catch (Exception ex) { logger($"❌ RS-485 Raw 전송 실패: {ex.Message}", Color.Red); }
             }
         }
 
-
+        // outputState1과 outputState2를 합쳐서 최종 패킷을 만들어 전송하는 메소드
+        private void UpdateAndSendCombinedOutput(string description)
+        {
+            var combinedData = new byte[9];
+            // 비트 OR 연산을 사용하여 두 상태를 합칩니다.
+            for (int i = 0; i < 9; i++)
+            {
+                combinedData[i] = (byte)(outputState1[i] | outputState2[i]);
+            }
+            // 합쳐진 최종 명령어를 한 번만 보냅니다.
+            SendPacket(new CommandData { Description = description, Data = combinedData });
+        }
     }
 }
 
