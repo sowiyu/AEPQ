@@ -62,7 +62,6 @@ namespace AEPQ.Services
 
             try
             {
-                // --- ★★★ 여기가 핵심 변경 사항입니다 ★★★ ---
                 // position 값에 따라 보낼 메시지를 결정합니다.
                 string requestMessage = "align"; // 기본값 (position == 0)
                 if (position == 1)

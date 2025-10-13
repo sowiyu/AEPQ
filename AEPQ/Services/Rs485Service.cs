@@ -76,6 +76,8 @@ namespace AEPQ.Services
         private const byte RECV_STX = 0x44;
         private const int PACKET_LENGTH = 16;
         // --- 자동 모드 트리거 신호 정의 ---
+        public bool IsHandToolActive => currentAutoModeState1 != AutoModeState.Idle || currentAutoModeState2 != AutoModeState.Idle;
+
         //private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x1A, 0x00, 0x00, 0x57, 0x3A, 0x55 };
         //private readonly byte[] triggerSignal2 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x0A, 0x04, 0x00, 0x4E, 0x7A, 0x55 };
         private byte[] outputState1 = new byte[9];
@@ -212,7 +214,7 @@ namespace AEPQ.Services
 
         private void ProcessPacket(byte[] packet)
         {
-            logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
+            //logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
             if (packet.Length < 12) return; // 최소 길이를 확인하여 안정성 확보
 
             if (IsAutoModeRunning)
@@ -375,13 +377,34 @@ namespace AEPQ.Services
                 // 로그 필터링
                 // if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
                 // {
-                logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                //logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
                 // }
             }
             catch (Exception ex) { logger($"❌ 전송 실패: {ex.Message}", Color.Red); }
         }
 
+        // ★★★ 새로 추가할 SendPacket 메소드 ★★★
+        /// <summary>
+        /// 데이터 배열의 특정 인덱스에만 값을 넣어 패킷을 전송합니다.
+        /// </summary>
+        /// <param name="index">값을 넣을 데이터 배열의 인덱스 (0~8)</param>
+        /// <param name="value">전송할 바이트 값</param>
+        /// <param name="description">동작 설명</param>
+        public void SendPacket(int index, byte value, string description)
+        {
+            // 1. 9바이트짜리 빈 데이터 배열을 만듭니다.
+            byte[] data = new byte[9];
 
+            // 2. 원하는 인덱스에 원하는 값만 설정합니다.
+            //    (인덱스가 유효한 범위인지 확인하는 코드를 추가하면 더 안전합니다)
+            if (index >= 0 && index < data.Length)
+            {
+                data[index] = value;
+            }
+
+            // 3. 기존 SendPacket 메소드를 재사용하여 최종 패킷을 만들어 보냅니다.
+            SendPacket(new CommandData { Description = description, Data = data });
+        }
 
         public void SendRawPacket(byte[] packet, string description)
         {
@@ -398,6 +421,8 @@ namespace AEPQ.Services
                 catch (Exception ex) { logger($"❌ RS-485 Raw 전송 실패: {ex.Message}", Color.Red); }
             }
         }
+
+
 
         // outputState1과 outputState2를 합쳐서 최종 패킷을 만들어 전송하는 메소드
         private void UpdateAndSendCombinedOutput(string description)

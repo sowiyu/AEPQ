@@ -316,6 +316,8 @@ namespace AEPQ
         {
             string logTitle = position > 0 ? $"▶️ 동작 1 ({position} 위치) 시작..." : "▶️ 동작 1 시작 (위치 지정 안함)...";
             Log(logTitle, Color.Blue);
+            btnStartPosition1.Enabled = false;
+            btnStartPosition2.Enabled = false;
             btnStartOperation1.Enabled = false; // 버튼 눌리면 바로 Disable
             btnStartOperation2.Enabled = false; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
 
@@ -327,18 +329,22 @@ namespace AEPQ
             try
             {
                 // 1. RS-485 실린더 전진
-                rs485Service.SendPacket(new CommandData
-                {
-                    Description = "케이스 실린더 전진",
-                    Data = new byte[] { 0, 0, 0, 0x02, 0, 0, 0, 0, 0 }
-                });
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "케이스 실린더 전진",
+                //    Data = new byte[] { 0, 0, 0, 0x02, 0, 0, 0, 0, 0 }
+                //});
+
+                rs485Service.SendPacket(3, 0x02, "케이스 실린더 후진");
+
                 Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
                 await Task.Delay(500);
-                rs485Service.SendPacket(new CommandData
-                {
-                    Description = "케이스 실린더 전진",
-                    Data = new byte[] { 0, 0, 0, 0x08, 0, 0, 0, 0, 0 }
-                });
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "케이스 실린더 전진",
+                //    Data = new byte[] { 0, 0, 0, 0x08, 0, 0, 0, 0, 0 }
+                //});
+                rs485Service.SendPacket(3, 0x08, "케이스 실린더 전진");
                 Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
                 await Task.Delay(500);
 
@@ -394,10 +400,6 @@ namespace AEPQ
                     modbusService.WriteRegister(131, position);
 
 
-
-
-
-
                     if (!modbusService.IsConnected)
                     {
                         Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
@@ -423,11 +425,6 @@ namespace AEPQ
                             return; // 최종 실패 시 작업 중단
                         }
                     }
-
-
-
-
-
 
 
                     bool isPositionReady = false;
@@ -491,20 +488,26 @@ namespace AEPQ
                     {
                         Log("  - Modbus: 150번=0 확인", Color.DarkBlue);
                         // 5. RS-485 실린더 후진
-                        rs485Service.SendPacket(new CommandData
-                        {
-                            Description = "케이스 실린더 후진",
-                            Data = new byte[] { 0, 0, 0, 0x01, 0, 0, 0, 0, 0 }
-                        });
+                        //rs485Service.SendPacket(new CommandData
+                        //{
+                        //    Description = "케이스 실린더 후진",
+                        //    Data = new byte[] { 0, 0, 0, 0x01, 0, 0, 0, 0, 0 }
+                        //});
+                        rs485Service.SendPacket(3, 0x01, "케이스 실린더 후진");
                         Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
                         await Task.Delay(500);
-                        rs485Service.SendPacket(new CommandData
-                        {
-                            Description = "케이스 실린더 후진",
-                            Data = new byte[] { 0, 0, 0, 0x04, 0, 0, 0, 0, 0 }
-                        });
+
+                        //rs485Service.SendPacket(new CommandData
+                        //{
+                        //    Description = "케이스 실린더 후진",
+                        //    Data = new byte[] { 0, 0, 0, 0x04, 0, 0, 0, 0, 0 }
+                        //});
+
+                        rs485Service.SendPacket(3, 0x04, "케이스 실린더 후진");
                         Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
                         await Task.Delay(500);
+                        btnStartPosition1.Enabled = true;
+                        btnStartPosition2.Enabled = true;
                         btnStartOperation1.Enabled = true; // 버튼 눌리면 바로 Disable
                         btnStartOperation2.Enabled = true; // 다른 버튼도 동시에 Disable 가능 (선택 사항)
                         break;
@@ -583,8 +586,6 @@ namespace AEPQ
         }
 
 
-
-
         private async void BtnStartOperation2_Click(object sender, EventArgs e)
         {
             if (rs485Service == null || !rs485Service.IsOpen)
@@ -613,31 +614,34 @@ namespace AEPQ
             try
             {
                 // 1. RS-485 실린더 전진 명령 전송
-                rs485Service.SendPacket(new CommandData
-                {
-                    Description = "동작2 실린더 up",
-                    Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
-                });
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "동작2 실린더 up",
+                //    Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
+                //});
+                rs485Service.SendPacket(3, 0x10, "동작2 실린더 up");
                 Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
 
                 await Task.Delay(50);
                 Thread.Sleep(1000);
 
-                rs485Service.SendPacket(new CommandData
-                {
-                    Description = "동작2 실린더 전진",
-                    Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 }
-                });
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "동작2 실린더 전진",
+                //    Data = new byte[] { 0, 0, 0x20, 0, 0, 0, 0, 0, 0 }
+                //});
+                rs485Service.SendPacket(2, 0x20, "동작2 실린더 전진");
                 Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
                 await Task.Delay(50);
 
                 Thread.Sleep(1000);
 
-                rs485Service.SendPacket(new CommandData
-                {
-                    Description = "동작2 실린더 down",
-                    Data = new byte[] { 0, 0, 0, 0x20, 0, 0, 0, 0, 0 }
-                });
+                //rs485Service.SendPacket(new CommandData
+                //{
+                //    Description = "동작2 실린더 down",
+                //    Data = new byte[] { 0, 0, 0, 0x20, 0, 0, 0, 0, 0 }
+                //});
+                rs485Service.SendPacket(3, 0x20, "동작2 실린더 down");
                 Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
 
 
@@ -720,20 +724,22 @@ namespace AEPQ
                     {
                         Log("  - Modbus: 150번=0 확인", Color.DarkBlue);
                         // 1. RS-485 실린더 후진/ down 명령 전송
-                        rs485Service.SendPacket(new CommandData
-                        {
-                            Description = "동작2 실린더 up",
-                            Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
-                        });
+                        //rs485Service.SendPacket(new CommandData
+                        //{
+                        //    Description = "동작2 실린더 up",
+                        //    Data = new byte[] { 0, 0, 0, 0x10, 0, 0, 0, 0, 0 }
+                        //});
+                        rs485Service.SendPacket(3, 0x10, "동작2 실린더 up");
                         Log("  - RS-485: 실린더 UP 명령 전송", Color.DarkBlue);
 
                         await Task.Delay(50);
                         Thread.Sleep(1000);
-                        rs485Service.SendPacket(new CommandData
-                        {
-                            Description = "동작2 실린더 후진",
-                            Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
-                        });
+                        //rs485Service.SendPacket(new CommandData
+                        //{
+                        //    Description = "동작2 실린더 후진",
+                        //    Data = new byte[] { 0, 0, 0x10, 0, 0, 0, 0, 0, 0 }
+                        //});
+                        rs485Service.SendPacket(2, 0x10, "동작2 실린더 후진");
                         Log("  - RS-485: 실린더 전진 명령 전송", Color.DarkBlue);
 
                         await Task.Delay(100); // 명령 후 안정화 시간
