@@ -75,14 +75,12 @@ namespace AEPQ.Services
         private const byte SEND_STX = 0x22, SEND_ETX = 0x33, SEND_ADDR = 0x03, SEND_CMD = 0x85;
         private const byte RECV_STX = 0x44;
         private const int PACKET_LENGTH = 16;
-        // --- 자동 모드 트리거 신호 정의 ---
-        public bool IsHandToolActive => currentAutoModeState1 != AutoModeState.Idle || currentAutoModeState2 != AutoModeState.Idle;
 
-        //private readonly byte[] triggerSignal1 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x1A, 0x00, 0x00, 0x57, 0x3A, 0x55 };
-        //private readonly byte[] triggerSignal2 = { 0x44, 0x10, 0x03, 0x85, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x0A, 0x04, 0x00, 0x4E, 0x7A, 0x55 };
         private byte[] outputState1 = new byte[9];
         private byte[] outputState2 = new byte[9];
         public bool IsOpen => serialPort.IsOpen;
+
+        public event Action<byte[]> PacketReceived;
 
         public Rs485Service(Action<string, Color> logAction)
         {
@@ -143,12 +141,12 @@ namespace AEPQ.Services
             {
                 try
                 {
-       
+
                     // 이 메소드는 outputState1과 outputState2를 보고 알아서
                     // '둘 다 끔', '1번만 켬', '2번만 켬', '둘 다 켬' 상태를 조합하여 보내줍니다.
                     UpdateAndSendCombinedOutput("상태 유지 Polling");
 
-                    await Task.Delay(100, token); // 3초는 너무 길 수 있으므로 1초로 줄이는 것을 권장합니다.
+                    await Task.Delay(3000, token); // 3초는 너무 길 수 있으므로 1초로 줄이는 것을 권장합니다.
                 }
                 catch (TaskCanceledException)
                 {
@@ -160,7 +158,7 @@ namespace AEPQ.Services
                 }
             }
         }
-
+        // Receive Data Event Handler
         private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
         {
             try
@@ -181,7 +179,7 @@ namespace AEPQ.Services
             }
             catch (Exception) { /* 포트가 닫힐 때 예외 발생 가능, 무시 */ }
         }
-
+        // 수신한 패킷들을 stx(0x44) 기준으로 분리하여 처리
         private void ProcessBuffer()
         {
             List<byte[]> packetsToProcess = new List<byte[]>();
@@ -211,17 +209,26 @@ namespace AEPQ.Services
             logger($"📥 수신 (시뮬레이션): {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
             ProcessPacket(packet);
         }
-
+        // 수신한 패킷을 처리하는 메소드(16바이트 온전한 패킷을 받은 후 처리되는 내용)
         private void ProcessPacket(byte[] packet)
         {
-            //logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
+            logger($"📥 수신: {BitConverter.ToString(packet).Replace("-", " ")}", Color.DarkGreen);
             if (packet.Length < 12) return; // 최소 길이를 확인하여 안정성 확보
+
+            // 실린더 작동도 체크
+            bool cylinder3Forward = (packet[11] & 0x0F) == 0x08;
+            bool cylinder3Backward = (packet[11] & 0x0F) == 0x0A;
+            bool cylinder4Forward = (packet[11] & 0x0F) == 0x02;
+            bool cylinder4Backward = (packet[11] & 0x0F) == 0x0A;
+            //bool cylinder5Up = (packet[11] & 0x0F) == 0x01;
+            //bool cylinder5Down = (packet[11] & 0x0F) == 0x0A;
 
             if (IsAutoModeRunning)
             {
                 // 각 핸드툴의 트리거 신호가 있는지 미리 확인
                 bool trigger1 = (packet[10] & 0xF0) == 0x10;
                 bool trigger2 = (packet[11] & 0x0F) == 0x04;
+
 
                 // --- ★★★ 여기가 핵심 수정 사항 ★★★ ---
                 // 1. 동시 시작 조건: 두 트리거가 모두 감지되고, 두 모드가 모두 대기 상태일 때
@@ -244,6 +251,8 @@ namespace AEPQ.Services
                     HandleAutoMode1(packet);
                     HandleAutoMode2(packet);
                 }
+                //1014 추가
+                PacketReceived?.Invoke(packet);
             }
         }
 
@@ -255,7 +264,6 @@ namespace AEPQ.Services
             {
                 return;
             }
-
 
             byte triggerByte1 = packet[10];
 
@@ -356,7 +364,7 @@ namespace AEPQ.Services
             }
         }
 
-
+        // 단동테스트 개별 클릭 시 사용하는 SendPacket 메소드
         public void SendPacket(CommandData command)
         {
             if (serialPort == null || !serialPort.IsOpen) { return; }
@@ -375,10 +383,10 @@ namespace AEPQ.Services
                 serialPort.Write(packet, 0, packet.Length);
 
                 // 로그 필터링
-                // if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
-                // {
-                //logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
-                // }
+                if (command.Description.Contains("Polling") == false && command.Description.Contains("유지") == false)
+                {
+                    logger($"📤 [{command.Description}] 전송: {BitConverter.ToString(packet).Replace("-", " ")}", Color.Blue);
+                }
             }
             catch (Exception ex) { logger($"❌ 전송 실패: {ex.Message}", Color.Red); }
         }
@@ -393,18 +401,23 @@ namespace AEPQ.Services
         public void SendPacket(int index, byte value, string description)
         {
             // 1. 9바이트짜리 빈 데이터 배열을 만듭니다.
-            byte[] data = new byte[9];
-
-            // 2. 원하는 인덱스에 원하는 값만 설정합니다.
-            //    (인덱스가 유효한 범위인지 확인하는 코드를 추가하면 더 안전합니다)
-            if (index >= 0 && index < data.Length)
+            byte[] finalData = new byte[9];
+            for (int i = 0; i < 9; i++)
             {
-                data[index] = value;
+                finalData[i] = (byte)(outputState1[i] | outputState2[i]);
+            }
+            // 2. 원하는 인덱스에 원하는 값만 설정합니다.
+            // index가 0~8 범위 내에 있는지 확인 후 현재 핸드툴 상태와 비트 OR 연산을 수행합니다.
+            if (index >= 0 && index < finalData.Length)
+            {
+                finalData[index] |= value;
             }
 
             // 3. 기존 SendPacket 메소드를 재사용하여 최종 패킷을 만들어 보냅니다.
-            SendPacket(new CommandData { Description = description, Data = data });
+            SendPacket(new CommandData { Description = description, Data = finalData });
         }
+
+
 
         public void SendRawPacket(byte[] packet, string description)
         {
@@ -422,8 +435,6 @@ namespace AEPQ.Services
             }
         }
 
-
-
         // outputState1과 outputState2를 합쳐서 최종 패킷을 만들어 전송하는 메소드
         private void UpdateAndSendCombinedOutput(string description)
         {
@@ -435,6 +446,47 @@ namespace AEPQ.Services
             }
             // 합쳐진 최종 명령어를 한 번만 보냅니다.
             SendPacket(new CommandData { Description = description, Data = combinedData });
+        }
+
+
+        // ▼▼▼ 클래스 맨 아래에 이 메서드를 통째로 붙여넣으세요 ▼▼▼
+        /// <summary>
+        /// 특정 조건을 만족하는 패킷이 수신될 때까지 비동기적으로 기다립니다.
+        /// </summary>
+        /// <param name="condition">수신된 패킷(byte[])을 받아 조건을 검사하고 bool을 반환하는 함수</param>
+        /// <param name="timeout">대기할 최대 시간 (예: TimeSpan.FromSeconds(3))</param>
+        /// <returns>성공 시 true, 시간 초과 시 false를 반환하는 Task</returns>
+        public async Task<bool> WaitForPacketAsync(Func<byte[], bool> condition, TimeSpan timeout)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+
+            // 패킷이 수신될 때마다 실행될 임시 이벤트 핸들러
+            Action<byte[]> handler = null;
+            handler = (packet) =>
+            {
+                // 내가 원하는 조건이 맞는지 확인
+                if (condition(packet))
+                {
+                    tcs.TrySetResult(true); // 조건 만족! Task를 성공으로 완료.
+                }
+            };
+
+            // 타임아웃 처리를 위한 CancellationTokenSource
+            using (var cts = new CancellationTokenSource(timeout))
+            {
+                // 타임아웃이 되면 Task를 실패(false)로 완료
+                cts.Token.Register(() => tcs.TrySetResult(false));
+
+                PacketReceived += handler; // 이벤트 구독 시작
+                try
+                {
+                    return await tcs.Task; // 여기서 결과가 올 때까지 기다림 (UI 안 멈춤)
+                }
+                finally
+                {
+                    PacketReceived -= handler; // 대기가 끝나면 반드시 이벤트 구독 해제 (메모리 누수 방지)
+                }
+            }
         }
     }
 }
