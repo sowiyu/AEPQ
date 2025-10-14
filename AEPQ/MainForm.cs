@@ -359,12 +359,32 @@ namespace AEPQ
                         Log($"  - TCP 좌표 응답: {coordinate}", Color.DarkCyan);
                         break;
                     }
+                    else if (!string.IsNullOrEmpty(coordinate) && coordinate.StartsWith("PC_Align_align_err"))
+                    {
+                        btnStartPosition1.Enabled = true;
+                        btnStartPosition2.Enabled = true;
+                        btnStartOperation1.Enabled = true; // 버튼 눌리면 바로 Disable
+                        btnStartOperation2.Enabled = true;
+                        Log($"얼라인 실패", Color.Red);
+                        rs485Service.SendPacket(3, 0x01, "케이스 실린더 후진");
+                        Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+                        MessageBox.Show("얼라인에 실패했습니다. 케이스를 확인해주세요.", "얼라인 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        await Task.Delay(500);
+
+
+                        rs485Service.SendPacket(3, 0x04, "케이스 실린더 후진");
+                        Log("  - RS-485: 실린더 후진 명령 전송", Color.DarkBlue);
+                        await Task.Delay(500);
+                        return;
+                    }
                     await Task.Delay(200);
                 }
                 Log("  - TCP: 좌표값 수신 완료", Color.CornflowerBlue);
                 // --- 3. Position 값에 따라 좌표 파싱 및 Modbus 쓰기 (핵심 로직) ---
                 string payload = coordinate.Replace("PC_Align_align_end_", "");
                 string[] blocks = payload.Split(',');
+
+
                 Log($"  - position {position}", Color.DarkCyan);
 
                 // 3-1. '위치 미지정' 버튼 (블록 2개 처리)
@@ -563,13 +583,41 @@ namespace AEPQ
                     {
                         // 쓰기 실패 시 한 번 더 재연결 및 재시도
                         Log("  - ℹ️ Modbus 쓰기 실패. 재연결 후 재시도합니다.", Color.Orange);
+
+                        // 여기 start address 132 부터 하도록 재시도 
                         if (modbusService.Connect() && modbusService.WriteRegister(startAddress + i, toWrite[i]))
                         {
                             Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
                         }
                         else
                         {
-                            Log($"  - ❌ Modbus 쓰기 최종 실패 (주소: {startAddress + i}). 동작을 중단합니다.", Color.Red);
+                            Log($"  - ❌ Modbus 쓰기 최종 실패 (시도 1) (주소: {startAddress + i}). 동작을 중단합니다.", Color.Red);
+
+
+                            // --- 재시도 후에도 실패 시 연결 상태 확인 및 재연결 ---
+                            if (!modbusService.IsConnected)
+                            {
+                                Log("  - ℹ️ Modbus 연결이 끊어져 재연결을 시도합니다.", Color.Orange);
+                                if (!modbusService.Connect())
+                                {
+                                    Log("  - ❌ Modbus 재연결에 실패했습니다. 동작을 중단합니다.", Color.Red);
+                                    return; // 재연결 실패 시 작업 중단
+                                }
+                                // 여기 start address 132 부터 하도록 재시도 
+                                if (modbusService.Connect() && modbusService.WriteRegister(startAddress + i, toWrite[i]))
+                                {
+                                    Log("  - ✅ Modbus 쓰기 재시도 성공.", Color.Green);
+                                }
+                                else
+                                {
+                                    Log($"  - ❌ Modbus 쓰기 최종 실패 시도 2 (주소: {startAddress + i}). 동작을 중단합니다.", Color.Red);
+                                    return; // 최종 실패 시 작업 중단
+
+                                }
+
+
+
+
                             return; // 최종 실패 시 작업 중단
                         }
                     }
@@ -578,6 +626,7 @@ namespace AEPQ
 
 
 
+            }
             }
             catch (Exception ex)
             {
